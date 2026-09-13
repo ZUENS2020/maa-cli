@@ -74,7 +74,7 @@ pub enum ReleaseCommands {
     Meta(ReleaseVersionOptions),
     /// Select a stable version for a release PR or pre-release base
     SelectVersion(SelectVersionOptions),
-    /// Update version.json files with release information
+    /// Package archives and version manifests into release-bundle
     Package,
     /// Update the version branch from the packaged release manifests
     Index,

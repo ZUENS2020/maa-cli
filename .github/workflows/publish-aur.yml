@@ -3,6 +3,10 @@ name: Publish AUR Package
 on:
   workflow_call:
     inputs:
+      commit:
+        description: Expected stable release commit
+        required: true
+        type: string
       pkgver:
         description: Package version
         required: false
@@ -47,8 +51,10 @@ jobs:
     steps:
     - name: Upgrade system
       run: |
-        pacman -Syu --needed --noconfirm git openssh pacman-contrib namcap
+        pacman -Syu --needed --noconfirm git openssh pacman-contrib namcap curl jq
         sed -i '/E_ROOT/d' /usr/bin/makepkg
+
+    - uses: actions/checkout@v7
 
     - name: Setup ssh
       run: |
@@ -74,6 +80,17 @@ jobs:
         makepkg -s --noconfirm
         namcap *.pkg.tar.zst
         makepkg --printsrcinfo > .SRCINFO
+
+    - name: Verify current stable release
+      if: ${{ !inputs.dryrun }}
+      env:
+        VERSION: ${{ inputs.pkgver || github.ref_name }}
+        COMMIT: ${{ inputs.commit }}
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        export VERSION="${VERSION#v}"
+        bash .github/scripts/release-current.sh
 
     - name: Commit changes
       run: |

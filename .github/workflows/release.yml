@@ -332,11 +332,6 @@ jobs:
         run: |
           cargo about generate about.hbs -o licenses.md
           cargo x -- release package
-          mkdir -p release-bundle/version
-          cp maa_cli-*.tar.gz maa_cli-*.zip release-bundle/
-          cp version/*.json version/*.txt release-bundle/version/
-          # Packaging wrote manifests locally; restore the published index for the guard.
-          git -C version restore .
       - name: Freeze bundle before publication
         if: steps.bundle.outputs.bundle != 'true'
         uses: actions/upload-artifact@v7
@@ -453,6 +448,7 @@ jobs:
     uses: ./.github/workflows/publish-homebrew.yml
     with:
       version: ${{ needs.meta.outputs.version }}
+      commit: ${{ needs.meta.outputs.commit }}
       dryrun: false
     secrets:
       MAA_HOMEBREW_BUMP_PR: ${{ secrets.MAA_HOMEBREW_BUMP_PR }}
@@ -464,6 +460,7 @@ jobs:
     uses: ./.github/workflows/publish-aur.yml
     with:
       pkgver: ${{ needs.meta.outputs.version }}
+      commit: ${{ needs.meta.outputs.commit }}
       dryrun: false
     secrets:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
@@ -475,6 +472,7 @@ jobs:
     uses: ./.github/workflows/publish-winget.yml
     with:
       version: ${{ needs.meta.outputs.version }}
+      commit: ${{ needs.meta.outputs.commit }}
       tag: ${{ needs.meta.outputs.tag }}
     secrets:
       MAABOT_WINGET_TOKEN: ${{ secrets.MAABOT_WINGET_TOKEN }}

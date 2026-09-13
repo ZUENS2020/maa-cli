@@ -18,6 +18,8 @@ pub fn run() -> Result<()> {
 
     let version = Version::parse(&version_str)
         .with_context(|| format!("Failed to parse version: {}", version_str))?;
+    let bundle = Path::new("release-bundle");
+    fs::create_dir_all(bundle.join("version")).context("Failed to create release bundle")?;
 
     // Determine which version files to update
     let version_files = channel.version_files();
@@ -69,8 +71,8 @@ pub fn run() -> Result<()> {
             .context("Failed to copy licenses.md")?;
 
         // Create archive based on platform and get checksum
-        let (archive_name, checksum_hash) = create_archive(target, &version_str, dir_str)?;
-        let size = fs::metadata(&archive_name)
+        let (archive_name, checksum_hash) = create_archive(bundle, target, &version_str, dir_str)?;
+        let size = fs::metadata(bundle.join(&archive_name))
             .context("Failed to get file metadata")?
             .len();
 
@@ -98,13 +100,13 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Write updated manifests back to files
+    // The published index is read-only input; all outputs belong to the bundle.
     for (file, manifest) in version_files.iter().zip(&manifests) {
-        write_manifest(file, manifest)?;
-        write_shell_format(file, manifest)?;
+        write_manifest(bundle.join(file), manifest)?;
+        write_shell_format(bundle.join(file), manifest)?;
     }
 
-    println!("Version JSON files updated successfully");
+    println!("Release bundle created successfully");
     Ok(())
 }
 
@@ -287,7 +289,12 @@ fn write_shell_format(file: impl AsRef<Path>, manifest: &VersionManifest<Details
     Ok(())
 }
 
-fn create_archive(target: &str, version: &str, dir: &str) -> Result<(String, String)> {
+fn create_archive(
+    output: &Path,
+    target: &str,
+    version: &str,
+    dir: &str,
+) -> Result<(String, String)> {
     // Determine archive format and binary name based on target
     // Use tar.gz for Unix-like systems (Linux, macOS) and zip for Windows
     let (format, bin_name) = if target.contains("-windows-msvc-winget") {
@@ -306,7 +313,7 @@ fn create_archive(target: &str, version: &str, dir: &str) -> Result<(String, Str
     let binary = format!("{dir}/{bin_name}");
     let licenses = format!("{dir}/licenses.md");
 
-    let checksum_hash = format.create(&archive_name, &[
+    let checksum_hash = format.create(output.join(&archive_name), &[
         (binary.as_str(), bin_name),
         (licenses.as_str(), "licenses.md"),
     ])?;

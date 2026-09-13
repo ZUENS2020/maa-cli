@@ -9,6 +9,9 @@ on:
       - .github/workflows/release.yml
       - .github/workflows/prepare-release.yml
       - .github/workflows/release-tools.yml
+      - .github/workflows/publish-homebrew.yml
+      - .github/workflows/publish-aur.yml
+      - .github/workflows/publish-winget.yml
       - cliff.toml
       - xtask/src/release/**
       - xtask/src/github.rs

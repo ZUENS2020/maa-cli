@@ -67,6 +67,9 @@ pub fn run(options: ReleaseVersionOptions) -> Result<()> {
         let tags = Command::new("git").args(["tag", "--list", "v*"]).read()?;
         ensure_beta_index_current(&manifest.version, &tags)?;
     }
+    if channel == Channel::Alpha {
+        check_nightly_index(&manifest)?;
+    }
     if skip_existing_prerelease(
         channel,
         &candidate,
@@ -157,6 +160,51 @@ fn ensure_beta_index_current(indexed: &Version, tags: &str) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+fn check_nightly_index(indexed: &VersionManifest<Details>) -> Result<()> {
+    if Command::new("git")
+        .args(["tag", "--list", "nightly"])
+        .read()?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    // The movable nightly tag alone cannot tell us which counter was published.
+    // Its release name records the full version even when the index push failed.
+    let release = Command::new("gh")
+        .args(["api", "repos/{owner}/{repo}/releases/tags/nightly"])
+        .read()
+        .context("Cannot inspect the existing nightly release; repair it before allocating another alpha")?;
+    #[derive(serde::Deserialize)]
+    struct NightlyRelease {
+        name: String,
+    }
+    let release: NightlyRelease = serde_json::from_str(&release)?;
+    let published = Version::parse(release.name.strip_prefix('v').unwrap_or(&release.name))
+        .context("The nightly release name must contain its published version")?;
+    let commit = Command::new("git")
+        .args(["rev-parse", "refs/tags/nightly^{}"])
+        .read()?;
+    ensure_nightly_index_current(indexed, &published, &commit)
+}
+
+fn ensure_nightly_index_current(
+    indexed: &VersionManifest<Details>,
+    published: &Version,
+    commit: &str,
+) -> Result<()> {
+    use std::cmp::Ordering;
+
+    ensure!(
+        match published.cmp_precedence(&indexed.version) {
+            Ordering::Less => true, // A later beta or stable also advances the alpha index.
+            Ordering::Equal => published == &indexed.version && commit == indexed.details.commit,
+            Ordering::Greater => false,
+        },
+        "Nightly {published} ({commit}) is not recorded in version/alpha.json; rerun its index job before allocating another alpha"
+    );
     Ok(())
 }
 
@@ -411,6 +459,37 @@ mod tests {
         ensure_beta_index_current(&indexed, "v0.8.0-beta.1\nv0.8.0-beta.2\nnightly\nv0.9.0")?;
         assert!(ensure_beta_index_current(&indexed, "v0.8.0-beta.3").is_err());
         assert!(ensure_beta_index_current(&indexed, "v0.9.0-beta.1").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn nightly_requires_index_recovery_before_allocating_another_alpha() -> Result<()> {
+        let mut indexed = VersionManifest {
+            version: Version::parse("0.8.0-alpha.1+sha.old")?,
+            details: Details {
+                tag: "nightly".into(),
+                commit: "old".into(),
+                assets: Default::default(),
+            },
+        };
+        let published = Version::parse("0.8.0-alpha.2+sha.new")?;
+        assert!(ensure_nightly_index_current(&indexed, &published, "new").is_err());
+        indexed.version = published.clone();
+        assert!(ensure_nightly_index_current(&indexed, &published, "new").is_err());
+        indexed.details.commit = "new".into();
+        ensure_nightly_index_current(&indexed, &published, "new")?;
+        assert!(
+            ensure_nightly_index_current(
+                &indexed,
+                &Version::parse("0.8.0-alpha.2+sha.other")?,
+                "other"
+            )
+            .is_err()
+        );
+        for newer in ["0.8.0-beta.1", "0.8.0", "0.9.0-alpha.1+sha.next"] {
+            indexed.version = Version::parse(newer)?;
+            ensure_nightly_index_current(&indexed, &published, "new")?;
+        }
         Ok(())
     }
 

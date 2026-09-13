@@ -111,4 +111,65 @@ git tag v0.8.0
 : > "$GITHUB_OUTPUT"
 "$xtask" release meta --channel beta --commit "$commit" --version auto --publish
 grep -qx 'skip=true' "$GITHUB_OUTPUT"
-echo "Release file and beta integration checks passed (fixtures: $test_root)"
+
+# Publishing nightly without its index must block the next allocation, then recover.
+mkdir -p "$test_root/alpha/crates/maa-cli" "$test_root/bin"
+cd "$test_root/alpha"
+git init -q -b main
+git config user.name 'Release Test'
+git config user.email 'release@example.invalid'
+git config commit.gpgsign false
+printf '[package]\nname = "maa-cli"\nversion = "0.8.0"\n' > crates/maa-cli/Cargo.toml
+git add crates
+git commit -qm 'chore: initial'
+git tag v0.7.5
+mkdir -p version release-bundle/version
+printf '{"version":"0.7.5","details":{"tag":"v0.7.5","commit":"old","assets":{}}}' > version/stable.json
+printf '{"version":"0.8.0-alpha.1+sha.old","details":{"tag":"nightly","commit":"old","assets":{}}}' > version/alpha.json
+commit=$(git rev-parse HEAD)
+: > "$GITHUB_OUTPUT"
+"$xtask" release meta --channel alpha --commit "$commit" --version 0.8.0 --publish
+export TEST_NIGHTLY_VERSION
+TEST_NIGHTLY_VERSION=$(sed -n 's/^version=//p' "$GITHUB_OUTPUT")
+[[ "$TEST_NIGHTLY_VERSION" == 0.8.0-alpha.2+sha.* ]]
+jq -n --arg version "$TEST_NIGHTLY_VERSION" --arg commit "$commit" \
+  '{version:$version,details:{tag:"nightly",commit:$commit,assets:{}}}' > release-bundle/version/alpha.json
+git tag nightly
+cat > "$test_root/bin/gh" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'api repos/{owner}/{repo}/releases/tags/nightly' ]]
+if [[ "${TEST_NIGHTLY_DENIED:-false}" == true ]]; then exit 1; fi
+jq -n --arg name "v$TEST_NIGHTLY_VERSION" '{name:$name}'
+MOCK
+chmod +x "$test_root/bin/gh"
+export PATH="$test_root/bin:$PATH"
+git commit -q --allow-empty -m 'fix: next nightly'
+next_commit=$(git rev-parse HEAD)
+: > "$GITHUB_OUTPUT"
+if "$xtask" release meta --channel alpha --commit "$next_commit" --version 0.8.0 --publish > "$RUNNER_TEMP/alpha-stale.log" 2>&1; then
+  echo 'Expected unindexed nightly to block the next allocation' >&2
+  exit 1
+fi
+grep -q 'rerun its index job' "$RUNNER_TEMP/alpha-stale.log"
+[[ ! -s "$GITHUB_OUTPUT" ]]
+CHANNEL=alpha VERSION="$TEST_NIGHTLY_VERSION" TAG=nightly COMMIT="$commit" "$xtask" release index
+"$xtask" release meta --channel alpha --commit "$next_commit" --version 0.8.0 --publish
+grep -q '^version=0.8.0-alpha.3+sha\.' "$GITHUB_OUTPUT"
+if TEST_NIGHTLY_DENIED=true "$xtask" release meta --channel alpha --commit "$next_commit" --version 0.8.0 --publish > "$RUNNER_TEMP/alpha-denied.log" 2>&1; then
+  echo 'Expected an unreadable nightly release to block allocation' >&2
+  exit 1
+fi
+# Packaging produces a complete bundle without rewriting its index input.
+mkdir maa_cli-x86_64-unknown-linux-gnu
+printf 'fixture binary\n' > "$test_root/bin/maa"
+tar -cf maa_cli-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu.tar -C "$test_root/bin" maa
+printf 'fixture license\n' > licenses.md
+cp version/alpha.json "$RUNNER_TEMP/index-before-package.json"
+CHANNEL=alpha VERSION="$TEST_NIGHTLY_VERSION" TAG=nightly COMMIT="$commit" "$xtask" release package
+cmp version/alpha.json "$RUNNER_TEMP/index-before-package.json"
+asset=$(jq -r '.details.assets["x86_64-unknown-linux-gnu"].name' release-bundle/version/alpha.json)
+[[ -f "release-bundle/$asset" && ! -f "$asset" ]]
+[[ -f release-bundle/version/alpha.txt ]]
+tar -tzf "release-bundle/$asset" | grep -qx maa
+echo "Release file, prerelease recovery and packaging checks passed (fixtures: $test_root)"

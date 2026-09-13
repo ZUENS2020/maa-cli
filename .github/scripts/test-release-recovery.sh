@@ -63,4 +63,36 @@ for TEST_CASE in expired denied; do
   if bash "$scripts/release-artifacts.sh" 2> "$RUNNER_TEMP/error"; then exit 1; fi
   [[ ! -s "$GITHUB_OUTPUT" ]]
 done
+
+# A successful index job from run A is not a currentness check for a later retry.
+unset TAG
+export GITHUB_REPOSITORY=example/repo GH_TOKEN=test VERSION=0.8.0 COMMIT=release-a
+export CURRENT_INDEX='{"version":"0.8.0","details":{"tag":"v0.8.0","commit":"release-a"}}'
+curl() {
+  echo 'read current stable index' >> "$GH_CALLS"
+  if [[ "$TEST_CASE" == denied ]]; then return 22; fi
+  printf '%s\n' "$CURRENT_INDEX"
+}
+export -f curl
+TEST_CASE=current
+bash "$scripts/release-current.sh"
+# B publishes after A's downstream job failed. Replaying only A must not write.
+CURRENT_INDEX='{"version":"0.9.0","details":{"tag":"v0.9.0","commit":"release-b"}}'
+if bash "$scripts/release-current.sh" 2> "$RUNNER_TEMP/error"; then
+  echo 'An obsolete downstream retry was allowed to publish' >&2
+  exit 1
+fi
+VERSION=0.9.0
+if bash "$scripts/release-current.sh" 2> "$RUNNER_TEMP/error"; then exit 1; fi
+COMMIT=release-b
+bash "$scripts/release-current.sh"
+# Manual publishing still checks the requested version without a supplied SHA.
+COMMIT='' bash "$scripts/release-current.sh"
+TAG=v0.9.0 COMMIT='' bash "$scripts/release-current.sh"
+if TAG=nightly COMMIT='' bash "$scripts/release-current.sh" 2> "$RUNNER_TEMP/error"; then
+  echo 'Manual WinGet publication accepted assets from a different tag' >&2
+  exit 1
+fi
+TEST_CASE=denied
+if bash "$scripts/release-current.sh" 2> "$RUNNER_TEMP/error"; then exit 1; fi
 echo "Release recovery checks passed (fixtures: $RUNNER_TEMP)"

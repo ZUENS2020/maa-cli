@@ -3,6 +3,10 @@ name: Publish Winget
 on:
   workflow_call:
     inputs:
+      commit:
+        description: Expected stable release commit
+        required: true
+        type: string
       version:
         description: Package version
         required: true
@@ -44,6 +48,14 @@ jobs:
       WINGET_CREATE_VERSION: "v1.12.8.0"
       WINGET_CREATE_SHA256: "8BD738851B524885410112678E3771B341C5C716DE60FBBECB88AB0A363ED85D"
     steps:
+      - uses: actions/checkout@v7
+      - name: Verify current stable release
+        env:
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ env.RELEASE_TAG }}
+          COMMIT: ${{ inputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/release-current.sh
       - name: Update Winget Package
         shell: pwsh
         run: |

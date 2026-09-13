@@ -62,6 +62,48 @@ cargo test -p maa-cli
 cargo test <测试名称>
 ```
 
+## 发布流程
+
+`main` 是发布源码分支。Stable 的发布意图由 PR 的 `release` 标签表示：同仓库的 PR 带此标签合入 `main` 才会发布。普通 PR 可以单独更新 Cargo 版本；修改 `Cargo.toml` 本身不会触发发布。
+
+### 选择版本
+
+`Prepare Stable Release` 和预发布的 `Release` 都接受 `version` 输入：
+
+- `auto`（默认）：优先沿用 Cargo 中高于最近正式 tag 的待发布版本，否则由 git-cliff 推导。
+- `patch`、`minor`、`major`：由 git-cliff 相对最近正式 tag 计算指定级别的版本。
+- `X.Y.Z`：直接指定稳定版本号，必须高于最近正式 tag；预发布不接受在这里输入 `beta.N`。
+
+自动推导只有 `fix`、`feat` 或 breaking change 会触发新版本：`fix` 推进 patch，`feat` 推进 minor，breaking change 在 `0.x` 阶段推进 minor。文档、重构等其他变更仍可出现在 changelog 中，但不单独触发自动 bump；需要发布时可以显式选择版本。
+
+### Stable
+
+1. 在 Actions 中从 `main` 运行 `Prepare Stable Release`，选择版本。
+2. git-cliff 生成并 prepend changelog，Cargo 更新 lockfile；工作流创建或更新 `release-prep/vX.Y.Z` PR，并添加 `release` 标签。如果版本已通过普通 PR 更新，本次 PR 可以只修改 changelog。
+3. 批准自动创建 PR 的 workflow runs，检查普通 CI 和 `Release Readiness`。准备后若 main 有新变更，重新运行 Prepare 刷新 PR；版本选择变化时应关闭旧的准备 PR，避免误合并。
+4. 合并带 `release` 标签的 PR。工作流使用实际合并 commit 和已确认的 Cargo 版本，在创建任何 tag 前检查一次最终候选 changelog，然后保存发布计划和说明。
+5. 编译并保存打包产物，创建正式 tag 和 GitHub Release，再由独立 job 更新 `version` 分支。Stable tag、Homebrew、AUR 和 WinGet 的后续任务在索引更新成功后运行。
+
+准备检查仅针对 release PR；普通 CI 不承担版本推导或 changelog 一致性检查。最终合并校验若发现过期内容，会在发布前停止；即使 Cargo 版本已合入，也可以重新运行 Prepare 创建修复 changelog 的 release PR。
+
+### Beta 和 Nightly
+
+Beta 在 Actions 中从 `main` 手动运行 `Release`，选择 `channel=beta`，设置基础版本，并在真正发布时勾选 `publish`。默认不勾选，仅构建预览。Nightly 每日自动运行，也可以选择 `channel=alpha` 手动运行。
+
+基础版本不变时 Beta 编号递增，例如 `0.8.0-beta.2` → `0.8.0-beta.3`；基础版本变化时从 `beta.1` 开始。相同 commit 和基础版本已经发布过该通道时跳过。预发布通过 `MAA_VERSION` 注入编译，不修改 main 的 `Cargo.toml`、`Cargo.lock` 或 `CHANGELOG.md`，也不需要版本 PR。
+
+Beta 发布后更新 `version` 分支的 `beta.json`、`alpha.json` 及对应 `.txt`；Nightly 只更新 alpha；Stable 更新三个通道。若 Beta tag 超前于索引，先恢复前一次发布的索引 job，再分配新编号。
+
+### 重试与验证
+
+同一次 workflow run 的版本、commit 和发布说明保存为 `release-plan` artifact，打包结果和索引清单保存为 `release-bundle` artifact。重跑全部 jobs 或只重跑失败 jobs 都复用已保存的内容，不重新分配版本或改写已生成的产物。版本索引更新失败时，重跑 `Update Version Index` 及其失败的后续任务即可，不需要重新编译。
+
+这些 artifacts 保留 90 天；过期时工作流停止，不能把重新推导和编译当作原发布的重试。不要提前删除恢复所需的 artifacts。正式 tag 已存在时必须指向同一 commit；旧 run 不能覆盖更新的通道版本。
+
+`Prepare Stable Release` 使用内置 `GITHUB_TOKEN`，以 `github-actions[bot]` 身份创建 PR。仓库需要在 Settings → Actions → General 中启用 `Allow GitHub Actions to create and approve pull requests`。具有 write 权限的维护者批准 PR 的 workflow runs 后，检查才会运行。合并操作应由维护者完成，不使用 `GITHUB_TOKEN` 自动合并，否则不会产生所需的后续发布事件。
+
+修改发布工具后运行 `cargo test -p xtask`、`cargo clippy -p xtask --all-targets -- -D warnings`、`bash .github/scripts/test-release-files.sh` 和 `bash .github/scripts/test-release-recovery.sh`。文件集成测试需要先 `cargo build -p xtask`，并在 PATH 中提供 git-cliff 2.13.1、git、Cargo、jq 和 Perl；测试只操作临时仓库。
+
 ## Workspace 架构
 
 ### 分层概览

@@ -1,12 +1,13 @@
 use std::str::FromStr;
 
 use anyhow::{Result, bail};
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use serde::Deserialize;
 
 pub mod archive;
 mod meta;
 mod package;
+mod selection;
 
 /// Release channel for maa-cli.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -70,14 +71,46 @@ impl Channel {
 #[derive(Subcommand)]
 pub enum ReleaseCommands {
     /// Parse version and determine release metadata
-    Meta,
+    Meta(ReleaseVersionOptions),
+    /// Select a stable version for a release PR or pre-release base
+    SelectVersion(SelectVersionOptions),
     /// Update version.json files with release information
     Package,
+    /// Update the version branch from the packaged release manifests
+    Index,
+    /// Check that the prepared release does not supersede a newer publication
+    CheckPublication,
+}
+
+#[derive(Args)]
+pub struct ReleaseVersionOptions {
+    /// Channel to build or publish
+    #[arg(long)]
+    channel: Channel,
+    /// Publish an optimized release build
+    #[arg(long)]
+    publish: bool,
+    /// Version selection for pre-releases; stable uses the Cargo package version
+    #[arg(long, default_value = "auto")]
+    version: selection::VersionSelection,
+    /// Full SHA of the commit selected by the triggering workflow
+    #[arg(long)]
+    commit: String,
+}
+
+#[derive(Args)]
+pub struct SelectVersionOptions {
+    /// auto, patch, minor, major, or an explicit stable X.Y.Z
+    #[arg(long, default_value = "auto")]
+    version: selection::VersionSelection,
 }
 
 pub fn run(command: ReleaseCommands) -> Result<()> {
     match command {
-        ReleaseCommands::Meta => meta::run(),
+        ReleaseCommands::Meta(options) => meta::run(options),
+        ReleaseCommands::SelectVersion(options) => selection::run(options),
         ReleaseCommands::Package => package::run(),
+        ReleaseCommands::Index => package::update_index(),
+        ReleaseCommands::CheckPublication => package::check_publication(),
     }
 }

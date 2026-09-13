@@ -1,0 +1,115 @@
+name: Prepare Stable Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'auto, patch, minor, major, or an exact stable version'
+        type: string
+        default: auto
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-state
+  queue: max
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Prepare Stable Release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.13.1
+
+      - name: Select stable version
+        id: release
+        env:
+          VERSION_SELECTION: ${{ inputs.version }}
+        run: |
+          cargo x -- release select-version --version "$VERSION_SELECTION"
+
+      - name: Prepare release files
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.release.outputs.previous_tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "v$VERSION" == "$PREVIOUS_TAG" ]]; then
+            echo 'No changes require an automatic release; specify a version to release anyway.'
+            exit 1
+          fi
+          bash .github/scripts/release-files.sh prepare
+
+      - name: Commit release preparation as GitHub Actions
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md Cargo.lock crates/maa-cli/Cargo.toml
+          git commit -m "chore(release): prepare for v$VERSION"
+
+      - name: Push branch and create or update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          branch="release-prep/v$VERSION"
+          remote_head="$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)"
+          if [[ -n "$remote_head" ]]; then
+            git push origin \
+              --force-with-lease="refs/heads/$branch:$remote_head" \
+              "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+
+          body="$RUNNER_TEMP/release-pr-body.md"
+          {
+            echo "Prepare the source release state for **v$VERSION**."
+            echo
+            echo "- Version selected during release preparation"
+            echo "- Cargo manifest and lockfile updated together"
+            echo "- Changelog prepended by git-cliff from the exact candidate commit"
+            echo
+            echo 'The release label makes merging this PR into main publish Stable.'
+            echo 'Approve its workflows, check Release Readiness, and refresh this PR if it is stale.'
+          } > "$body"
+
+          pr_url="$(gh pr list \
+            --base main \
+            --head "$branch" \
+            --state open \
+            --json url \
+            --jq '.[0].url')"
+          if ! gh label list --json name --jq '.[].name' | grep -qx release; then
+            gh label create release --description 'Merging this PR publishes a stable release'
+          fi
+          if [[ -n "$pr_url" ]]; then
+            gh pr edit "$pr_url" \
+              --title "chore(release): prepare for v$VERSION" \
+              --body-file "$body" --add-label release
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "chore(release): prepare for v$VERSION" \
+              --body-file "$body" --label release
+          fi

@@ -1,46 +1,79 @@
-use std::{
-    fs,
-    num::NonZeroU16,
-    path::Path,
-    process::{Command, exit},
-    str::FromStr,
-};
+use std::{num::NonZeroU16, path::Path, process::Command};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use maa_version::{VersionManifest, cli::Details};
 use semver::{BuildMetadata, Prerelease, Version};
-use serde::Deserialize;
 
-use super::Channel;
+use super::{Channel, ReleaseVersionOptions, selection};
 use crate::{cmd::CommandExt, github};
 
-#[derive(Deserialize)]
-struct CargoToml {
-    package: Package,
-}
-
-#[derive(Deserialize)]
-struct Package {
-    version: Version,
-}
-
-pub fn run() -> Result<()> {
-    let cargo_pkg_version = get_cargo_version()?;
+pub fn run(options: ReleaseVersionOptions) -> Result<()> {
     let commit_sha = get_commit_sha()?;
+    ensure!(
+        commit_sha == options.commit,
+        "Checked-out commit {commit_sha} does not match expected commit {}",
+        options.commit
+    );
     let commit_short_sha = get_commit_short_sha()?;
-
-    let event_name = github::EventName::from_env()?;
-
-    let (channel, publish) = determine_channel_and_publish(event_name)?;
+    let channel = options.channel;
+    let publish = options.publish;
+    let candidate = if channel == Channel::Stable {
+        selection::cargo_version()?
+    } else {
+        let (candidate, previous_tag) = selection::select(&options.version)?;
+        // A stable tag can be published before the index job completes. Do not
+        // create an older prerelease just because stable.json still lags behind.
+        if previous_tag == format!("v{candidate}") {
+            println!("No releasable changes since {previous_tag}");
+            github::set_output("skip", "true")?;
+            return Ok(());
+        }
+        candidate
+    };
+    selection::ensure_stable(&candidate)?;
 
     // Check if version directory exists
     ensure!(Path::new("version").exists(), "version directory not found");
 
     let version_file = channel.version_file();
+    let stable_manifest = read_version_manifest(Channel::Stable.version_file())?;
+    ensure!(
+        stable_manifest.version.pre.is_empty() && stable_manifest.version.build.is_empty(),
+        "version/stable.json contains an invalid stable version: {}",
+        stable_manifest.version
+    );
+    ensure!(
+        candidate >= stable_manifest.version,
+        "Selected stable v{} is older than version/stable.json v{}",
+        candidate,
+        stable_manifest.version
+    );
 
-    // Skip if no new commits
+    if channel != Channel::Stable && candidate == stable_manifest.version {
+        println!("No releasable changes since v{}", stable_manifest.version);
+        github::set_output("skip", "true")?;
+        return Ok(());
+    }
     let manifest = read_version_manifest(&version_file)?;
-    if manifest.details.commit == commit_sha {
+    if channel == Channel::Stable {
+        validate_stable_release(
+            &candidate,
+            &manifest.version,
+            &commit_sha,
+            &manifest.details.commit,
+        )?;
+    }
+    if channel == Channel::Beta {
+        let tags = Command::new("git").args(["tag", "--list", "v*"]).read()?;
+        ensure_beta_index_current(&manifest.version, &tags)?;
+    }
+    if skip_existing_prerelease(
+        channel,
+        &candidate,
+        &manifest.version,
+        &commit_sha,
+        &manifest.details.commit,
+    ) {
         println!("No new commits, skipping all steps");
         github::set_output("skip", "true")?;
         return Ok(());
@@ -48,22 +81,8 @@ pub fn run() -> Result<()> {
 
     let published_version = manifest.version;
 
-    // For stable releases triggered by push tag, validate tag matches version
-    if event_name == github::EventName::Push {
-        let github_ref = github::github_ref();
-        let ref_version = github_ref.strip_prefix("refs/tags/v").unwrap_or("");
-        ensure!(
-            ref_version == cargo_pkg_version.to_string(),
-            "Version tag not matched: expected v{cargo_pkg_version}, got {github_ref}"
-        );
-    }
-
-    let (version, tag) = compute_version(
-        channel,
-        &cargo_pkg_version,
-        &published_version,
-        &commit_short_sha,
-    )?;
+    let (version, tag) =
+        compute_version(channel, &candidate, &published_version, &commit_short_sha)?;
 
     let channel_str = channel.as_str();
     println!(
@@ -83,15 +102,6 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn get_cargo_version() -> Result<Version> {
-    let content =
-        fs::read_to_string("crates/maa-cli/Cargo.toml").context("Failed to read Cargo.toml")?;
-
-    let cargo_toml: CargoToml = toml::from_str(&content).context("Failed to parse Cargo.toml")?;
-
-    Ok(cargo_toml.package.version)
-}
-
 fn get_commit_sha() -> Result<String> {
     Command::new("git").args(["rev-parse", "HEAD"]).read()
 }
@@ -102,56 +112,81 @@ fn get_commit_short_sha() -> Result<String> {
         .read()
 }
 
-fn determine_channel_and_publish(event_name: github::EventName) -> Result<(Channel, bool)> {
-    match event_name {
-        github::EventName::PullRequest => {
-            println!("PR detected");
-            Ok((Channel::Alpha, false))
-        }
-        github::EventName::Schedule => {
-            println!("Scheduled event detected");
-            Ok((Channel::Alpha, true))
-        }
-        github::EventName::WorkflowDispatch => {
-            println!("Workflow dispatch event detected");
-            let event = github::WorkflowEvent::from_env()?;
-            let channel = event.inputs.channel;
-            Ok((channel, event.inputs.publish))
-        }
-        github::EventName::Push => {
-            println!("New tag detected");
-            Ok((Channel::Stable, true))
-        }
-    }
+fn validate_stable_release(
+    candidate: &Version,
+    published: &Version,
+    commit: &str,
+    published_commit: &str,
+) -> Result<()> {
+    ensure!(
+        candidate > published || (candidate == published && commit == published_commit),
+        "Stable version {candidate} must be newer than {published}, or replay the same release commit"
+    );
+    Ok(())
 }
 
-fn read_version_manifest(file: &str) -> Result<VersionManifest<Details>> {
-    let content = fs::read_to_string(file).with_context(|| format!("Failed to read {}", file))?;
+fn skip_existing_prerelease(
+    channel: Channel,
+    candidate: &Version,
+    published: &Version,
+    commit: &str,
+    published_commit: &str,
+) -> bool {
+    channel != Channel::Stable
+        && is_same_core_version(candidate, published)
+        && commit == published_commit
+}
 
-    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", file))
+fn ensure_beta_index_current(indexed: &Version, tags: &str) -> Result<()> {
+    for tag in tags.lines() {
+        let Some(version) = tag
+            .strip_prefix('v')
+            .and_then(|version| Version::parse(version).ok())
+        else {
+            continue;
+        };
+        if version
+            .pre
+            .as_str()
+            .strip_prefix("beta.")
+            .is_some_and(|counter| counter.parse::<u16>().is_ok())
+        {
+            ensure!(
+                version <= *indexed,
+                "Beta tag {tag} is newer than version/beta.json ({indexed}); rerun the previous release's index job before allocating another beta"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn read_version_manifest(file: impl AsRef<Path>) -> Result<VersionManifest<Details>> {
+    let file = file.as_ref();
+    let content = std::fs::read_to_string(file)
+        .with_context(|| format!("Failed to read {}", file.display()))?;
+
+    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", file.display()))
 }
 
 fn compute_version(
     channel: Channel,
-    cargo_version: &Version,
+    stable_version: &Version,
     published_version: &Version,
     commit_short_sha: &str,
 ) -> Result<(Version, String)> {
     match channel {
         Channel::Stable => {
-            let tag = format!("v{}", cargo_version);
-            Ok((cargo_version.clone(), tag))
+            let tag = format!("v{stable_version}");
+            Ok((stable_version.clone(), tag))
         }
         Channel::Beta => {
-            check_version_bumped(cargo_version, published_version)?;
-
-            let mut version = cargo_version.clone();
+            ensure_candidate_not_older(stable_version, published_version)?;
+            let published_prerelease = PrereleaseVersion::try_from(&published_version.pre)?;
+            let mut version = stable_version.clone();
             version.build = BuildMetadata::EMPTY;
 
-            if is_same_core_version(cargo_version, published_version) {
-                version.pre = PrereleaseVersion::from(&published_version.pre)
-                    .bump_beta()
-                    .into();
+            if is_same_core_version(stable_version, published_version) {
+                version.pre = published_prerelease.bump_beta()?.into();
             } else {
                 version.pre = Prerelease::new("beta.1")?;
             }
@@ -160,15 +195,13 @@ fn compute_version(
             Ok((version, tag))
         }
         Channel::Alpha => {
-            check_version_bumped(cargo_version, published_version)?;
-
-            let mut version = cargo_version.clone();
+            ensure_candidate_not_older(stable_version, published_version)?;
+            let published_prerelease = PrereleaseVersion::try_from(&published_version.pre)?;
+            let mut version = stable_version.clone();
             version.build = BuildMetadata::new(&format!("sha.{}", commit_short_sha))?;
 
-            if is_same_core_version(cargo_version, published_version) {
-                version.pre = PrereleaseVersion::from(&published_version.pre)
-                    .bump_alpha()
-                    .into();
+            if is_same_core_version(stable_version, published_version) {
+                version.pre = published_prerelease.bump_alpha()?.into();
             } else {
                 version.pre = Prerelease::new("alpha.1")?;
             }
@@ -186,10 +219,8 @@ struct PrereleaseVersion {
     alpha: Option<NonZeroU16>,
 }
 
-impl FromStr for PrereleaseVersion {
-    type Err = std::convert::Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+impl PrereleaseVersion {
+    fn parse(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Ok(Self::default());
         }
@@ -198,35 +229,44 @@ impl FromStr for PrereleaseVersion {
             let parts: Vec<&str> = rest.split('.').collect();
 
             if parts.len() == 1 {
-                // beta.N
-                let beta = parts[0].parse().ok().and_then(NonZeroU16::new);
-                Ok(PrereleaseVersion { beta, alpha: None })
-            } else if parts.len() >= 3 && parts[1] == "alpha" {
-                // beta.N.alpha.M
-                let beta = parts[0].parse().ok().and_then(NonZeroU16::new);
-                let alpha = parts[2].parse().ok().and_then(NonZeroU16::new);
-                Ok(PrereleaseVersion { beta, alpha })
+                let beta = parse_counter(parts[0], "beta")?;
+                Ok(Self {
+                    beta: Some(beta),
+                    alpha: None,
+                })
+            } else if parts.len() == 3 && parts[1] == "alpha" {
+                let beta = parse_counter(parts[0], "beta")?;
+                let alpha = parse_counter(parts[2], "alpha")?;
+                Ok(PrereleaseVersion {
+                    beta: Some(beta),
+                    alpha: Some(alpha),
+                })
             } else {
-                Ok(Self::default())
+                bail!("Unsupported pre-release version: {s}")
             }
         } else if let Some(rest) = s.strip_prefix("alpha.") {
-            // alpha.N
-            let alpha = rest.parse().ok().and_then(NonZeroU16::new);
-            Ok(PrereleaseVersion { beta: None, alpha })
+            let alpha = parse_counter(rest, "alpha")?;
+            Ok(Self {
+                beta: None,
+                alpha: Some(alpha),
+            })
         } else {
-            Ok(Self::default())
+            bail!("Unsupported pre-release version: {s}")
         }
     }
 }
 
-impl From<&Prerelease> for PrereleaseVersion {
-    fn from(prerelease: &Prerelease) -> Self {
-        prerelease.as_str().parse().unwrap()
+impl TryFrom<&Prerelease> for PrereleaseVersion {
+    type Error = anyhow::Error;
+
+    fn try_from(prerelease: &Prerelease) -> Result<Self> {
+        Self::parse(prerelease.as_str())
     }
 }
 
 impl From<PrereleaseVersion> for Prerelease {
     fn from(version: PrereleaseVersion) -> Self {
+        // Fixed identifiers and nonzero integer counters always form valid semver prereleases.
         match (version.beta, version.alpha) {
             (None, None) => Prerelease::EMPTY,
             (None, Some(alpha)) => Prerelease::new(&format!("alpha.{}", alpha.get())).unwrap(),
@@ -239,46 +279,189 @@ impl From<PrereleaseVersion> for Prerelease {
 }
 
 impl PrereleaseVersion {
-    fn bump_beta(self) -> Self {
-        let beta_num = self.beta.map(|n| n.get()).unwrap_or(0) + 1;
-        PrereleaseVersion {
-            beta: NonZeroU16::new(beta_num),
+    fn bump_beta(self) -> Result<Self> {
+        Ok(PrereleaseVersion {
+            beta: Some(next_counter(self.beta, "beta")?),
             alpha: None,
-        }
+        })
     }
 
-    fn bump_alpha(self) -> Self {
-        match (self.beta, self.alpha) {
-            (None, alpha) => {
-                // None or alpha.N -> alpha.N+1
-                let alpha_num = alpha.map(|n| n.get()).unwrap_or(0) + 1;
-                PrereleaseVersion {
-                    beta: None,
-                    alpha: NonZeroU16::new(alpha_num),
-                }
-            }
-            (Some(beta), alpha) => {
-                // beta.N or beta.N.alpha.M -> beta.N.alpha.M+1
-                let alpha_num = alpha.map(|n| n.get()).unwrap_or(0) + 1;
-                PrereleaseVersion {
-                    beta: Some(beta),
-                    alpha: NonZeroU16::new(alpha_num),
-                }
-            }
-        }
+    fn bump_alpha(self) -> Result<Self> {
+        Ok(PrereleaseVersion {
+            beta: self.beta,
+            alpha: Some(next_counter(self.alpha, "alpha")?),
+        })
     }
+}
+
+fn next_counter(current: Option<NonZeroU16>, name: &str) -> Result<NonZeroU16> {
+    current
+        .map_or(0, NonZeroU16::get)
+        .checked_add(1)
+        .and_then(NonZeroU16::new)
+        .with_context(|| format!("{name} release counter exhausted"))
 }
 
 fn is_same_core_version(v1: &Version, v2: &Version) -> bool {
     v1.major == v2.major && v1.minor == v2.minor && v1.patch == v2.patch
 }
 
-fn check_version_bumped(cargo_pkg_version: &Version, published_version: &Version) -> Result<()> {
-    if cargo_pkg_version == published_version {
-        println!("The version in Cargo.toml is the same as the published version");
-        println!("No pre-release is allowed for the same version");
-        github::set_output("skip", "true")?;
-        exit(0)
-    }
+fn ensure_candidate_not_older(candidate: &Version, published: &Version) -> Result<()> {
+    let candidate_core = (candidate.major, candidate.minor, candidate.patch);
+    let published_core = (published.major, published.minor, published.patch);
+    ensure!(
+        candidate_core >= published_core,
+        "Derived stable v{candidate} is older than published pre-release v{published}"
+    );
     Ok(())
+}
+
+fn parse_counter(value: &str, name: &str) -> Result<NonZeroU16> {
+    value
+        .parse::<u16>()
+        .ok()
+        .and_then(NonZeroU16::new)
+        .with_context(|| format!("Invalid {name} counter: {value}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beta_uses_the_derived_stable_version_without_changing_it() -> Result<()> {
+        let stable = Version::new(0, 8, 0);
+        let published = Version::parse("0.8.0-beta.2")?;
+
+        let (version, tag) = compute_version(Channel::Beta, &stable, &published, "abc1234")?;
+
+        assert_eq!(version, Version::parse("0.8.0-beta.3")?);
+        assert_eq!(tag, "v0.8.0-beta.3");
+        assert_eq!(stable, Version::new(0, 8, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn alpha_starts_again_when_the_stable_candidate_changes() -> Result<()> {
+        let stable = Version::new(0, 9, 0);
+        let published = Version::parse("0.8.0-beta.2.alpha.4+sha.old")?;
+
+        let (version, tag) = compute_version(Channel::Alpha, &stable, &published, "abc1234")?;
+
+        assert_eq!(version, Version::parse("0.9.0-alpha.1+sha.abc1234")?);
+        assert_eq!(tag, "nightly");
+        Ok(())
+    }
+
+    #[test]
+    fn beta_starts_again_when_the_base_changes() -> Result<()> {
+        let (version, tag) = compute_version(
+            Channel::Beta,
+            &Version::new(0, 9, 0),
+            &Version::parse("0.8.0-beta.2")?,
+            "abc1234",
+        )?;
+        assert_eq!(version, Version::parse("0.9.0-beta.1")?);
+        assert_eq!(tag, "v0.9.0-beta.1");
+        Ok(())
+    }
+
+    #[test]
+    fn same_commit_only_skips_the_same_prerelease_base() -> Result<()> {
+        let published = Version::parse("0.8.0-beta.2")?;
+        assert!(skip_existing_prerelease(
+            Channel::Beta,
+            &Version::new(0, 8, 0),
+            &published,
+            "same",
+            "same"
+        ));
+        assert!(!skip_existing_prerelease(
+            Channel::Beta,
+            &Version::new(0, 9, 0),
+            &published,
+            "same",
+            "same"
+        ));
+        assert!(!skip_existing_prerelease(
+            Channel::Stable,
+            &Version::new(0, 8, 0),
+            &Version::new(0, 8, 0),
+            "same",
+            "same"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn stable_replay_requires_the_original_commit() -> Result<()> {
+        let published = Version::new(0, 8, 0);
+        validate_stable_release(&published, &published, "same", "same")?;
+        assert!(validate_stable_release(&published, &published, "new", "old").is_err());
+        assert!(
+            validate_stable_release(&Version::new(0, 7, 6), &published, "same", "same").is_err()
+        );
+        validate_stable_release(&Version::new(0, 9, 0), &published, "new", "old")?;
+        Ok(())
+    }
+
+    #[test]
+    fn newer_beta_tags_require_index_recovery() -> Result<()> {
+        let indexed = Version::parse("0.8.0-beta.2")?;
+        ensure_beta_index_current(&indexed, "v0.8.0-beta.1\nv0.8.0-beta.2\nnightly\nv0.9.0")?;
+        assert!(ensure_beta_index_current(&indexed, "v0.8.0-beta.3").is_err());
+        assert!(ensure_beta_index_current(&indexed, "v0.9.0-beta.1").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn exhausted_prerelease_counters_return_errors() -> Result<()> {
+        for (channel, version) in [
+            (Channel::Beta, "0.8.0-beta.65535"),
+            (Channel::Alpha, "0.8.0-alpha.65535"),
+            (Channel::Alpha, "0.8.0-beta.2.alpha.65535"),
+        ] {
+            assert!(
+                compute_version(
+                    channel,
+                    &Version::new(0, 8, 0),
+                    &Version::parse(version)?,
+                    "abc1234"
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prerelease_state_rejects_unknown_or_malformed_versions() -> Result<()> {
+        for version in ["0.8.0-rc.1", "0.8.0-beta.bad", "0.8.0-beta.1.alpha"] {
+            let published = Version::parse(version)?;
+            assert!(
+                compute_version(Channel::Beta, &Version::new(0, 8, 0), &published, "abc1234")
+                    .is_err(),
+                "{version} should be rejected"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prerelease_candidate_must_not_move_backwards() -> Result<()> {
+        let error = compute_version(
+            Channel::Beta,
+            &Version::new(0, 8, 0),
+            &Version::parse("0.9.0-beta.1")?,
+            "abc1234",
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("older than published pre-release")
+        );
+        Ok(())
+    }
 }

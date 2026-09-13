@@ -3,9 +3,10 @@
 //! This module provides caching functionality to avoid re-downloading manifests
 //! when they haven't changed, using HTTP ETag headers.
 //!
-//! Note: The cache does not use file locking for simplicity and performance.
-//! In rare concurrent write scenarios, some ETag updates may be lost, which is
-//! acceptable as the cache will be refreshed on the next check.
+//! Note: The cache does not use file locking or multi-file transactions. Rare
+//! concurrent successful downloads may therefore leave a complete body paired
+//! with an ETag from another response. This is an accepted cache consistency
+//! tradeoff; each individual file replacement remains atomic.
 
 use std::{fs, io, path::Path, time};
 

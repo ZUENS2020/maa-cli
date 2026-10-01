@@ -144,13 +144,21 @@ impl TaskConfigTemplate {
         let mut client_type = self.client_type;
 
         let mut tasks: Vec<Task> = Vec::new();
+        let mut skipped: Vec<SkippedTask> = Vec::new();
         let mut prepend_startup = startup.unwrap_or(false);
         let mut append_closedown = closedown.unwrap_or(false);
+        let mut file_index = 0;
 
         use TaskType::*;
 
         for task in self.tasks.iter() {
             if !task.is_active() {
+                skipped.push(SkippedTask {
+                    name: task.name.clone(),
+                    task_type: task.task_type(),
+                    index: file_index,
+                });
+                file_index += 1;
                 continue;
             }
 
@@ -217,13 +225,14 @@ impl TaskConfigTemplate {
                 _ => {}
             }
 
-            let mut inited_task = Task::new(task_type, params);
+            let mut inited_task = Task::new(task_type, params).with_index(file_index);
 
             if let Some(name) = &task.name {
                 inited_task = inited_task.with_name(name.to_owned());
             }
 
-            tasks.push(inited_task)
+            tasks.push(inited_task);
+            file_index += 1;
         }
 
         let client_type = client_type.unwrap_or_default();
@@ -240,6 +249,12 @@ impl TaskConfigTemplate {
         }
 
         if prepend_startup {
+            for task in tasks.iter_mut() {
+                task.index += 1;
+            }
+            for skip in skipped.iter_mut() {
+                skip.index += 1;
+            }
             tasks.insert(
                 0,
                 Task::new(
@@ -248,15 +263,26 @@ impl TaskConfigTemplate {
                         "start_game_enabled" => true,
                         "client_type" => client_type.to_string(),
                     ),
-                ),
+                )
+                .with_index(0),
             );
         }
 
         if append_closedown {
-            tasks.push(Task::new(
-                TaskType::CloseDown,
-                object!("client_type" => client_type.to_string()),
-            ));
+            let next_index = tasks
+                .iter()
+                .map(|task| task.index)
+                .chain(skipped.iter().map(|task| task.index))
+                .max()
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            tasks.push(
+                Task::new(
+                    TaskType::CloseDown,
+                    object!("client_type" => client_type.to_string()),
+                )
+                .with_index(next_index),
+            );
         }
 
         Ok(TaskConfig {
@@ -264,7 +290,23 @@ impl TaskConfigTemplate {
             start_app: startup.unwrap_or(false),
             close_app: closedown.unwrap_or(false),
             tasks,
+            skipped,
         })
+    }
+}
+
+#[cfg_attr(test, derive(PartialEq, Debug))]
+pub struct SkippedTask {
+    pub name: Option<String>,
+    pub task_type: TaskType,
+    pub index: usize,
+}
+
+impl SkippedTask {
+    pub fn name_or_default(&self) -> &str {
+        self.name
+            .as_deref()
+            .unwrap_or_else(|| self.task_type.to_str())
     }
 }
 
@@ -274,6 +316,7 @@ pub struct TaskConfig {
     pub start_app: bool,
     pub close_app: bool,
     pub tasks: Vec<Task>,
+    pub skipped: Vec<SkippedTask>,
 }
 
 impl TaskConfig {
@@ -293,18 +336,21 @@ impl TaskConfig {
                 start_app: determine_start_app(&task.params),
                 close_app: false,
                 tasks: vec![task],
+                skipped: Vec::new(),
             }),
             TaskType::CloseDown => Ok(Self {
                 client_type,
                 start_app: false,
                 close_app: determine_close_app(&task.params),
                 tasks: vec![task],
+                skipped: Vec::new(),
             }),
             _ => Ok(Self {
                 client_type,
                 start_app: false,
                 close_app: false,
                 tasks: vec![task],
+                skipped: Vec::new(),
             }),
         }
     }
@@ -332,11 +378,19 @@ fn normalize_task_params(task_type: TaskType, params: &mut MAAValue) -> Result<(
     Ok(())
 }
 
-#[cfg_attr(test, derive(PartialEq, Debug))]
+#[cfg_attr(test, derive(Debug))]
 pub struct Task {
     pub name: Option<String>,
     pub task_type: TaskType,
     pub params: MAAValue,
+    pub(crate) index: usize,
+}
+
+#[cfg(test)]
+impl PartialEq for Task {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.task_type == other.task_type && self.params == other.params
+    }
 }
 
 impl Task {
@@ -345,11 +399,17 @@ impl Task {
             name: None,
             task_type,
             params,
+            index: 0,
         }
     }
 
     fn with_name(mut self, name: String) -> Self {
         self.name = Some(name);
+        self
+    }
+
+    const fn with_index(mut self, index: usize) -> Self {
+        self.index = index;
         self
     }
 
@@ -695,6 +755,7 @@ mod tests {
                     client_type: Official,
                     start_app: false,
                     close_app: false,
+                    skipped: vec![],
                     tasks: vec![],
                 }
             );
@@ -707,6 +768,7 @@ mod tests {
                     closedown: None,
                     tasks: vec![
                         TaskTemplate::new(StartUp, template!("start_game_enabled" => true))
+                            .with_name(String::from("StartUp"))
                             .with_variants(vec![TaskVariant {
                                 condition: Condition::Not {
                                     condition: Box::new(Condition::Always),
@@ -721,6 +783,11 @@ mod tests {
                     client_type: Official,
                     start_app: false,
                     close_app: false,
+                    skipped: vec![SkippedTask {
+                        name: Some(String::from("StartUp")),
+                        task_type: StartUp,
+                        index: 0,
+                    }],
                     tasks: vec![],
                 }
             );
@@ -747,6 +814,7 @@ mod tests {
                     client_type: YoStarEN,
                     start_app: true,
                     close_app: false,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             StartUp,
@@ -781,6 +849,7 @@ mod tests {
                     client_type: YoStarEN,
                     start_app: false,
                     close_app: false,
+                    skipped: vec![],
                     tasks: vec![Task::new(
                         StartUp,
                         template!(
@@ -810,6 +879,7 @@ mod tests {
                     client_type: YoStarEN,
                     start_app: false,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![Task::new(
                         CloseDown,
                         template!("client_type" => "YoStarEN").resolve().unwrap()
@@ -836,6 +906,7 @@ mod tests {
                     client_type: YoStarEN,
                     start_app: false,
                     close_app: false,
+                    skipped: vec![],
                     tasks: vec![Task::new(
                         CloseDown,
                         template!(
@@ -861,6 +932,7 @@ mod tests {
                     client_type: Official,
                     start_app: false,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![Task::new(
                         CloseDown,
                         template!("client_type" => "Official").resolve().unwrap()
@@ -884,6 +956,7 @@ mod tests {
                     client_type: YoStarEN,
                     start_app: false,
                     close_app: false,
+                    skipped: vec![],
                     tasks: vec![Task::new(
                         Fight,
                         template!("client_type" => "YoStarEN").resolve().unwrap()
@@ -914,6 +987,7 @@ mod tests {
                     client_type: Official,
                     start_app: true,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             StartUp,
@@ -958,6 +1032,7 @@ mod tests {
                     client_type: Official,
                     start_app: true,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             StartUp,
@@ -1004,6 +1079,7 @@ mod tests {
                     client_type: Official,
                     start_app: true,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             StartUp,
@@ -1044,6 +1120,7 @@ mod tests {
                     client_type: YoStarEN,
                     start_app: true,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             StartUp,
@@ -1088,6 +1165,7 @@ mod tests {
                     client_type: Official,
                     start_app: false,
                     close_app: true,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             StartUp,
@@ -1119,6 +1197,7 @@ mod tests {
                     client_type: Official,
                     start_app: false,
                     close_app: false,
+                    skipped: vec![],
                     tasks: vec![
                         Task::new(
                             Infrast,

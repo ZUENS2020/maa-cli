@@ -70,6 +70,43 @@ Both predefined and custom tasks output summary information upon completion, inc
 
 If you don't want task summaries, disable them with the `--no-summary` parameter.
 
+### Structured Run Report
+
+Unattended scripts can pass `--report <path>` to write a JSON report when the run finishes (including on task failure or interruption, as long as the process can still write the file). Default logs and the human-readable summary stay unchanged.
+
+```bash
+maa run daily --batch --report /tmp/maa-report.json
+maa run daily --batch --output json
+maa run daily --batch --report /tmp/maa-report.json --output json --strict-exit
+```
+
+`--output json` prints the same report to stdout and omits the human-readable summary. The JSON Schema is [`run-report.schema.json`][run-report-schema].
+
+The report includes start/finish timestamps, cli/core/resource versions, and per-task `name`, `type`, `status` (`succeeded` / `failed` / `skipped` / `stopped` / `not_run`), duration, and a failure/skip reason. Per-type details are aggregated from callbacks MaaCore already emits:
+
+- `fight`: stage, times fought, sanity used when reported, drops keyed by item id
+- `annihilation`: progress fields when the core reports them; unknown fields are kept as-is
+- `recruit`: recruits started and their tags
+- `infrast`: rooms handled
+- `award`: claimed reward kinds when they can be inferred from subtask names
+
+`skipped` is distinct from `succeeded`: for example a `[[tasks.variants]]` condition that did not match, or a core skip code such as `WEEKLY_CAP_REACHED` / `NO_PRTS_CARD` / `NO_FULL_RECORD`. Tasks that never started are `not_run`. Unknown or future callback fields are stored on each task's `details` object, so new Status / annihilation reason callbacks appear without a schema change.
+
+`--dry-run` also warns about unknown parameter keys for known task types (for example a typo like `mial` instead of `mail`). Free-form `Custom` tasks are not checked.
+
+### Exit Codes
+
+Default behavior is unchanged: `0` on success, `1` on any failure. With `--strict-exit` the process uses distinct codes:
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | All tasks succeeded or were skipped (including dry-run) |
+| 2 | One or more tasks failed or stopped after a successful connection |
+| 3 | Startup / connection / initialization failure |
+| 130 | Interrupted by a termination signal |
+
+[run-report-schema]: ../../schemas/run-report.schema.json
+
 ### Task Logging
 
 maa-cli outputs logs with the following levels (low to high): `Error`, `Warn`, `Info`, `Debug`, and `Trace`. The default level is `Warn`. Set the log level via the `MAA_LOG` environment variable (e.g., `MAA_LOG=debug`) or use `-v` to increase and `-q` to decrease the level.

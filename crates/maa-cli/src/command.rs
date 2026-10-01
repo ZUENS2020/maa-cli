@@ -542,6 +542,35 @@ mod test {
                 ..
             } if task == "task"
         ));
+
+        assert!(matches!(
+            parse_from(["maa", "run", "task", "--report", "out.json"]).command,
+            Command::Run {
+                common: run::CommonArgs {
+                    report: Some(path),
+                    ..
+                },
+                ..
+            } if path == Path::new("out.json")
+        ));
+        assert!(matches!(
+            parse_from(["maa", "run", "task", "--output", "json", "--strict-exit"]).command,
+            Command::Run {
+                common: run::CommonArgs {
+                    output: Some(run::OutputFormat::Json),
+                    strict_exit: true,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_from(["maa", "run", "task", "--dry-run"]).command,
+            Command::Run {
+                common: run::CommonArgs { dry_run: true, .. },
+                ..
+            }
+        ));
     }
 
     #[test]

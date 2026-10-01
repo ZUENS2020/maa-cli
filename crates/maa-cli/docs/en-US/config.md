@@ -470,6 +470,7 @@ JSON schemas for configuration files are in the [`schemas` directory][schema-dir
 - Task configuration schema: [`task.schema.json`][task-schema]
 - MaaCore configuration schema: [`asst.schema.json`][asst-schema]
 - CLI configuration schema: [`cli.schema.json`][cli-schema]
+- Structured run report (`maa run --report`) schema: [`run-report.schema.json`][run-report-schema]
 
 With these schemas, you can get auto-completion and validation in supported editors with plugins.
 
@@ -483,3 +484,4 @@ With these schemas, you can get auto-completion and validation in supported edit
 [task-schema]: ../../schemas/task.schema.json
 [asst-schema]: ../../schemas/asst.schema.json
 [cli-schema]: ../../schemas/cli.schema.json
+[run-report-schema]: ../../schemas/run-report.schema.json

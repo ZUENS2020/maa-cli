@@ -1,21 +1,23 @@
 mod callback;
-use callback::summary;
+use callback::{report, summary};
 
 mod external;
+mod params;
 
 pub mod preset;
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, atomic},
 };
 
 use anyhow::{Context, Result, bail};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use log::{debug, warn};
 use maa_core::Assistant;
 use maa_dirs::{self as dirs, Ensure, MAA_CORE_LIB};
 use maa_types::InstanceOptionKey;
+use maa_value::prelude::*;
 use signal_hook::consts::TERM_SIGNALS;
 
 use crate::{
@@ -25,6 +27,7 @@ use crate::{
         task::{TaskConfig, TaskConfigTemplate},
     },
     installer,
+    state::CLI_VERSION_STR,
 };
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -90,6 +93,35 @@ pub struct CommonArgs {
     /// disable this behavior for this run.
     #[arg(long, verbatim_doc_comment)]
     pub no_auto_reconnect: bool,
+    /// Write a structured JSON report to this path when the run finishes
+    ///
+    /// The file is written after the run ends, including on task failure
+    /// or interruption where possible. Existing human-readable summary
+    /// output is unchanged.
+    #[arg(long, value_name = "PATH", verbatim_doc_comment)]
+    pub report: Option<PathBuf>,
+    /// Emit the structured run report as JSON on stdout
+    ///
+    /// When set to `json`, the human-readable summary is omitted so stdout
+    /// stays machine-readable. Combine with `--report` to also write a file.
+    #[arg(long, value_enum, value_name = "FORMAT", verbatim_doc_comment)]
+    pub output: Option<OutputFormat>,
+    /// Use distinct exit codes for partial vs startup failure
+    ///
+    /// Without this flag, any failure still exits with code 1.
+    /// With this flag:
+    ///
+    /// - 0: all tasks succeeded or were skipped
+    /// - 2: one or more tasks failed or stopped after a successful connection
+    /// - 3: startup / connection / initialization failure
+    /// - 130: interrupted by a termination signal
+    #[arg(long, verbatim_doc_comment)]
+    pub strict_exit: bool,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputFormat {
+    Json,
 }
 
 impl CommonArgs {
@@ -126,6 +158,20 @@ fn run_core<F>(f: F, args: CommonArgs) -> Result<()>
 where
     F: FnOnce(&AsstConfig) -> Result<TaskConfig>,
 {
+    callback::reset_run_flags();
+
+    let want_report = args.report.is_some() || args.output.is_some() || args.strict_exit;
+    if want_report {
+        report::init(report::Recorder::new(
+            report::Versions {
+                cli: CLI_VERSION_STR.to_owned(),
+                core: None,
+                resource: report::resource_version(),
+            },
+            args.dry_run,
+        ));
+    }
+
     // Auto update hot update resource
     installer::hot_update::update()?;
     installer::resource::update(true)?;
@@ -142,6 +188,9 @@ where
 
     // Load and setup MaaCore
     load_core().context("Failed to load MaaCore!")?;
+    if let Ok(version) = Assistant::get_version() {
+        report::with_core_version(version);
+    }
     setup_core(&asst_config)?;
 
     // Register signal handlers
@@ -168,6 +217,9 @@ where
 
     // Register tasks to Assistant and prepare summary
     let mut task_summary = (!args.no_summary).then(summary::Summary::new);
+    for skipped in &task_config.skipped {
+        report::add_skipped(skipped.index, skipped.name_or_default(), skipped.task_type);
+    }
     for task in task_config.tasks {
         let task_type = task.task_type;
         let params = serde_json::to_string_pretty(&task.params)?;
@@ -175,6 +227,9 @@ where
             "Adding task [{}] with params: {params}",
             task.name_or_default(),
         );
+        if args.dry_run {
+            params::warn_unknown_params(task_type, task.name_or_default(), &task.params);
+        }
         let id = asst
             .append_task(task_type, params.as_str())
             .with_context(|| {
@@ -183,6 +238,14 @@ where
                     task.name_or_default(),
                 )
             })?;
+
+        report::add_task(
+            task.index,
+            id,
+            task.name_or_default(),
+            task_type,
+            task.params.get_or("enable", true),
+        );
 
         if let Some(s) = task_summary.as_mut() {
             s.insert(id, task.name, task_type);
@@ -225,6 +288,7 @@ where
 
         while asst.running() {
             if stop_bool.load(atomic::Ordering::Relaxed) {
+                report::mark_interrupted();
                 bail!("Interrupted by user!");
             }
             if offline_stop.load(atomic::Ordering::Relaxed) {
@@ -255,9 +319,56 @@ pub fn run<F>(f: F, args: CommonArgs) -> Result<()>
 where
     F: FnOnce(&AsstConfig) -> Result<TaskConfig>,
 {
+    let report_path = args.report.clone();
+    let json_stdout = matches!(args.output, Some(OutputFormat::Json));
+    let strict_exit = args.strict_exit;
+    let display_summary = !args.no_summary && !json_stdout;
+
     let ret = run_core(f, args);
 
-    summary::display();
+    if let Err(err) = &ret {
+        let message = format!("{err:#}");
+        if message.contains("Interrupted by user") {
+            report::mark_interrupted();
+        } else {
+            report::mark_startup_error(message);
+        }
+    }
+
+    let status = if let Some(recorder) = report::take() {
+        let (report, status) = recorder.finish(chrono::Utc::now());
+        if let Some(path) = report_path.as_deref() {
+            if let Err(err) = report::write_report(path, &report) {
+                let path = path.display();
+                warn!("Failed to write run report to {path}: {err}");
+            } else {
+                let path = path.display();
+                debug!("Wrote run report to {path}");
+            }
+        }
+        if json_stdout && let Err(err) = report::print_report(&report) {
+            warn!("Failed to print JSON run report: {err}");
+        }
+        Some(status)
+    } else {
+        None
+    };
+
+    if display_summary {
+        summary::display();
+    }
+
+    if strict_exit && let Some(status) = status {
+        let code = status.exit_code(true);
+        if code != 0 {
+            if let Err(err) = &ret {
+                log::error!("{err:#}");
+            } else if matches!(status, report::RunStatus::PartialFailure) {
+                log::error!("Some error occurred during running task!");
+            }
+            std::process::exit(code);
+        }
+    }
 
     ret?;
 

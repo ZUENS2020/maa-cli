@@ -77,6 +77,43 @@ maa startup Official && maa fight BB-7 -m 3 && maa closedown
 
 如果你不想要任务总结，可以通过 `--no-summary` 参数来关闭。
 
+### 结构化运行报告
+
+无人值守脚本可以用 `--report <path>` 在运行结束时（包括任务失败或被信号中断时，只要进程还能写文件）写出一份 JSON 报告，而不必解析人类可读的总结文本。默认的日志和总结输出保持不变。
+
+```bash
+maa run daily --batch --report /tmp/maa-report.json
+maa run daily --batch --output json
+maa run daily --batch --report /tmp/maa-report.json --output json --strict-exit
+```
+
+`--output json` 会把同一份报告打印到标准输出，并省略人类可读总结，方便管道处理。JSON Schema 见 [`run-report.schema.json`][run-report-schema]。
+
+报告包含起止时间、cli/core/resource 版本，以及每个任务的 `name`、`type`、`status`（`succeeded` / `failed` / `skipped` / `stopped` / `not_run`）、时长和失败/跳过原因。任务级详情从 MaaCore 已有回调聚合：
+
+- `fight`：关卡、次数、理智消耗（若回调提供）、按 item id 汇总的掉落
+- `annihilation`：进度等字段（核心若上报）；未知字段原样保留
+- `recruit`：已发起的公招次数与 tag
+- `infrast`：处理过的房间
+- `award`：已领取的奖励类型（能从子任务名判断时）
+
+`skipped` 与 `succeeded` 是分开的：例如 `[[tasks.variants]]` 条件不匹配，或核心通过回调给出 `WEEKLY_CAP_REACHED` / `NO_PRTS_CARD` / `NO_FULL_RECORD` 等跳过码。未执行到的任务是 `not_run`。未知或新增的回调字段会进入每个任务的 `details` 对象，因此后续核心新增的 Status / 剿灭原因码无需改 schema 也能出现在报告里。
+
+`--dry-run` 会额外对已知任务类型的参数名做校验，例如把 `mail` 拼成 `mial` 时会给出警告；自定义任务（`Custom`）不会检查。
+
+### 退出码
+
+默认行为与以前相同：成功为 `0`，任意失败为 `1`。加上 `--strict-exit` 后使用更细的退出码：
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 全部成功或被跳过（含 dry-run） |
+| 2 | 连接成功后有任务失败或被停止 |
+| 3 | 启动/连接/初始化失败 |
+| 130 | 被终止信号中断 |
+
+[run-report-schema]: ../../schemas/run-report.schema.json
+
 ### 任务日志
 
 maa-cli 会输出日志，日志输出级别从低到高分别为 `Error`，`Warn`，`Info`，`Debug` 和 `Trace`。默认的日志输出级别为 `Warn`。日志级别可以通过 `MAA_LOG` 环境变量来设置，例如 `MAA_LOG=debug`。你也可以通过 `-v` 或者 `-q` 来增加或者减少日志输出级别。

@@ -1,0 +1,177 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ZUENS2020/maa-cli/raw/main/crates/maa-cli/schemas/run-report.schema.json",
+  "title": "maa-cli run report",
+  "description": "Structured result written by `maa run --report <path>` or printed by `--output json`. Unknown callback fields are preserved under each task's `details` object (and extra keys on typed objects) so future core callbacks do not require a schema change.",
+  "type": "object",
+  "required": ["started_at", "finished_at", "outcome", "versions", "connection", "tasks"],
+  "additionalProperties": true,
+  "properties": {
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "outcome": {
+      "type": "string",
+      "enum": ["succeeded", "partial", "failed", "interrupted", "dry_run"]
+    },
+    "versions": {
+      "type": "object",
+      "required": ["cli"],
+      "additionalProperties": true,
+      "properties": {
+        "cli": { "type": "string" },
+        "core": { "type": ["string", "null"] },
+        "resource": { "type": ["string", "null"] }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["connected", "failed", "not_attempted", "interrupted", "unknown"]
+        },
+        "what": { "type": "string" },
+        "why": { "type": "string" }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/task" }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "definitions": {
+    "failReason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Stable machine-readable code. Known values include VARIANT_INACTIVE, DISABLED, TASK_CHAIN_ERROR, FAILED_TO_START_GAME, STAGE_NOT_FOUND, CONNECTION_FAILED, NO_PRTS_CARD, NO_FULL_RECORD, WEEKLY_CAP_REACHED, SANITY_NOT_ENOUGH. Unknown core codes are passed through."
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["name", "type", "status"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["succeeded", "failed", "skipped", "stopped", "not_run"]
+        },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" },
+        "duration_s": { "type": "number" },
+        "fail_reason": { "$ref": "#/definitions/failReason" },
+        "skip_reason": { "$ref": "#/definitions/failReason" },
+        "fight": { "$ref": "#/definitions/fight" },
+        "annihilation": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stage": { "type": "string" },
+            "times": { "type": "integer" },
+            "progress_before": { "type": "integer" },
+            "progress_after": { "type": "integer" },
+            "weekly_cap": { "type": "integer" },
+            "prts_cards": { "type": "integer" },
+            "cards_used": { "type": "integer" }
+          }
+        },
+        "recruit": { "$ref": "#/definitions/recruit" },
+        "infrast": { "$ref": "#/definitions/infrast" },
+        "award": { "$ref": "#/definitions/award" },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Raw extra callback payloads keyed by `what` (or leftover fields from known callbacks). Future Status / annihilation callbacks land here without a schema change."
+        }
+      }
+    },
+    "fight": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "stage": { "type": "string" },
+        "times": { "type": "integer" },
+        "sanity_used": { "type": "integer" },
+        "drops": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" },
+          "description": "Aggregated drop counts keyed by item id"
+        },
+        "drops_named": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "medicine": { "type": "integer" },
+        "expiring_medicine": { "type": "integer" },
+        "stone": { "type": "integer" },
+        "sanity": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "recruit": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "started": { "type": "integer" },
+        "refreshed": { "type": "integer" },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["level", "tags"],
+            "additionalProperties": true,
+            "properties": {
+              "level": { "type": "integer" },
+              "tags": { "type": "array", "items": { "type": "string" } },
+              "state": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "infrast": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "rooms": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["facility", "index"],
+            "additionalProperties": true,
+            "properties": {
+              "facility": { "type": "string" },
+              "index": { "type": "integer" },
+              "product": { "type": "string" },
+              "operators": { "type": "array", "items": { "type": "string" } },
+              "candidates": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "award": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "claimed": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,7 +1,11 @@
+pub mod report;
 pub mod summary;
 use std::{
     fmt::Write,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use log::{debug, error, info, trace, warn};
@@ -13,6 +17,14 @@ use summary::{Facility, edit_current_task_detail, end_current_task, start_task};
 use crate::state::AGENT;
 
 pub static MAA_CORE_ERRORED: AtomicBool = AtomicBool::new(false);
+pub static MAA_CONNECTION_FAILED: AtomicBool = AtomicBool::new(false);
+pub static MAA_INIT_FAILED: AtomicBool = AtomicBool::new(false);
+
+pub fn reset_run_flags() {
+    MAA_CORE_ERRORED.store(false, Ordering::Relaxed);
+    MAA_CONNECTION_FAILED.store(false, Ordering::Relaxed);
+    MAA_INIT_FAILED.store(false, Ordering::Relaxed);
+}
 
 fn json_pretty(value: &impl serde::Serialize) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|e| format!("<serialization error: {e}>"))
@@ -54,12 +66,15 @@ impl MaaCallback {
             return;
         };
 
+        report::ingest(kind, message);
+
         use MessageKind::*;
 
         let ret = match kind {
             InternalError => Some(()),
             InitFailed => {
                 error!("InitializationError");
+                MAA_INIT_FAILED.store(true, Ordering::Relaxed);
                 Some(())
             }
             ConnectionInfo => self.process_connection_info(message),
@@ -105,19 +120,28 @@ impl MaaCallback {
                 "Got UUID: {}",
                 message.get("details")?.get("uuid")?.as_str()?
             ),
-            "ConnectFailed" => error!(
-                "Failed to connect to android device, {}, Please check your connect configuration: {}",
-                message.get("why")?.as_str()?,
-                json_pretty(message.get("details")?)
-            ),
+            "ConnectFailed" => {
+                MAA_CONNECTION_FAILED.store(true, Ordering::Relaxed);
+                error!(
+                    "Failed to connect to android device, {}, Please check your connect configuration: {}",
+                    message.get("why")?.as_str()?,
+                    json_pretty(message.get("details")?)
+                )
+            }
             // Resolution
             "ResolutionGot" => debug!(
                 "Got Resolution: {} × {}",
                 message.get("details")?.get("width")?.as_i64()?,
                 message.get("details")?.get("height")?.as_i64()?
             ),
-            "UnsupportedResolution" => error!("{}", "UnsupportedResolution"),
-            "ResolutionError" => error!("{}", "ResolutionAcquisitionFailure"),
+            "UnsupportedResolution" => {
+                MAA_CONNECTION_FAILED.store(true, Ordering::Relaxed);
+                error!("{}", "UnsupportedResolution")
+            }
+            "ResolutionError" => {
+                MAA_CONNECTION_FAILED.store(true, Ordering::Relaxed);
+                error!("{}", "ResolutionAcquisitionFailure")
+            }
 
             // Connection
             "Connected" => info!("{}", "Connected"),
@@ -146,7 +170,10 @@ impl MaaCallback {
                 message.get("details")?.get("max")?.as_i64()?,
             ),
 
-            "TouchModeNotAvailable" => error!("{}", "TouchModeNotAvailable"),
+            "TouchModeNotAvailable" => {
+                MAA_CONNECTION_FAILED.store(true, Ordering::Relaxed);
+                error!("{}", "TouchModeNotAvailable")
+            }
             _ => trace!("{}: {}", "Unknown Connection Info", json_pretty(message)),
         }
 
@@ -174,7 +201,7 @@ impl MaaCallback {
             TaskChainError => {
                 error!("{} {}", taskchain, "Error");
                 end_current_task(summary::Reason::Error);
-                MAA_CORE_ERRORED.store(true, std::sync::atomic::Ordering::Relaxed);
+                MAA_CORE_ERRORED.store(true, Ordering::Relaxed);
             }
             TaskChainExtraInfo => {}
 
@@ -639,5 +666,51 @@ mod tests {
         let (cb, offline_stop) = MaaCallback::new(true);
         cb.on_message(MessageKind::SubTaskStart, Some(offline_confirm_msg()));
         assert!(!offline_stop.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn callback_feeds_structured_report() {
+        let _ = report::take();
+        report::init(report::Recorder::new(
+            report::Versions {
+                cli: "test".to_owned(),
+                core: None,
+                resource: None,
+            },
+            false,
+        ));
+        report::add_task(0, 1, "Fight", maa_types::TaskType::Fight, true);
+
+        let (cb, _) = MaaCallback::new(true);
+        cb.on_message(
+            MessageKind::TaskChainStart,
+            Some(r#"{"taskchain":"Fight","taskid":1}"#),
+        );
+        cb.on_message(
+            MessageKind::SubTaskExtraInfo,
+            Some(
+                r#"{"taskchain":"Fight","taskid":1,"what":"FightTimes","details":{"series":1,"sanity_cost":18}}"#,
+            ),
+        );
+        cb.on_message(
+            MessageKind::SubTaskStart,
+            Some(
+                r#"{"taskchain":"Fight","taskid":1,"subtask":"ProcessTask","details":{"task":"StartButton2"}}"#,
+            ),
+        );
+        cb.on_message(
+            MessageKind::TaskChainCompleted,
+            Some(r#"{"taskchain":"Fight","taskid":1}"#),
+        );
+
+        let recorder = report::take().expect("recorder was initialized");
+        let (report, status) = recorder.finish(chrono::Utc::now());
+        assert_eq!(status, report::RunStatus::Succeeded);
+        assert_eq!(report.tasks[0].status, report::TaskStatus::Succeeded);
+        assert_eq!(report.tasks[0].fight.as_ref().unwrap().times, 1);
+        assert_eq!(
+            report.tasks[0].fight.as_ref().unwrap().sanity_used,
+            Some(18)
+        );
     }
 }

@@ -1,5 +1,12 @@
 # Release Notes
 
+## Unreleased
+
+### Features
+
+- Add structured JSON run reports via `--report` / `--output json`, plus `--strict-exit` codes
+- Warn about unknown task parameter keys during `--dry-run`
+
 ## Release 0.7.5
 
 ### Features

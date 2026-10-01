@@ -460,7 +460,8 @@ passphrase = "password"       # ssh 密钥的密码
 
 - 自定任务文件的 JSON Schema 文件为 [`task.schema.json`][task-schema]；
 - MaaCore 配置的 JSON Schema 文件为 [`asst.schema.json`][asst-schema]；
-- CLI 配置的 JSON Schema 文件为 [`cli.schema.json`][cli-schema]。
+- CLI 配置的 JSON Schema 文件为 [`cli.schema.json`][cli-schema]；
+- `maa run --report` 结构化运行报告的 JSON Schema 文件为 [`run-report.schema.json`][run-report-schema]。
 
 [task-types]: https://maa.plus/docs/zh-cn/protocol/integration.html#任务类型一览
 [emulator-ports]: https://maa.plus/docs/zh-cn/manual/connection.html#获取端口号
@@ -472,3 +473,4 @@ passphrase = "password"       # ssh 密钥的密码
 [task-schema]: ../../schemas/task.schema.json
 [asst-schema]: ../../schemas/asst.schema.json
 [cli-schema]: ../../schemas/cli.schema.json
+[run-report-schema]: ../../schemas/run-report.schema.json

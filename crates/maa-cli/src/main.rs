@@ -103,6 +103,16 @@ fn main() -> Result<()> {
         Command::SSSCopilot { params, common } => run::run_preset(params, common)?,
         Command::ParadoxCopilot { params, common } => run::run_preset(params, common)?,
         Command::Reclamation { params, common } => run::run_preset(params, common)?,
+        Command::Status {
+            params,
+            json,
+            mut common,
+        } => {
+            if json {
+                common.no_summary = true;
+            }
+            run::run_status(params, common, json)?;
+        }
         Command::Convert {
             input,
             output,

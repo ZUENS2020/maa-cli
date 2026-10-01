@@ -4,8 +4,17 @@
 
 ### Features
 
-- Add structured JSON run reports via `--report` / `--output json`, plus `--strict-exit` codes
-- Warn about unknown task parameter keys during `--dry-run`
+- Add `maa status` read-only snapshot (needs a MaaCore with the Status task)
+- Expose instance options `delay_multiplier` and `save_failure_screenshot` (sent only when set)
+- Fight annihilation params `on_no_card` / `on_no_record` / `max_cards`
+- Structured reports: annihilation progress from stock `StageDrops`, accurate `award.checked` vs `award.claimed`, start/end sanity, UTC `Z` timestamps
+
+### Bug Fixes
+
+- Keep `connection.what` on Connected/failure instead of later FPS events
+- Drop ghost `taskid` 0 trailing tasks and LastBattleStageName / ExceededLimit noise
+- Use a consistent `drop_stats` array and write report files as `0644`
+- Recognize MaaCore 6.18 task parameter keys during `--dry-run`
 
 ## Release 0.7.5
 

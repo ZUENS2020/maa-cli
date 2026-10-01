@@ -56,6 +56,18 @@ pub struct FightParams {
     /// In DrGrandet mode, Wait in the using Originites confirmation screen until
     /// the 1 point of sanity has been restored and then immediately use the Originite.
     dr_grandet: bool,
+    /// Annihilation only: what to do when no PRTS proxy card is available
+    ///
+    /// `current` (default) keeps the historical flow, `skip` / `fail` /
+    /// `normal_deploy` require a newer MaaCore. Older cores ignore this key.
+    #[arg(long, value_parser = ["current", "skip", "fail", "normal_deploy"])]
+    on_no_card: Option<String>,
+    /// Annihilation only: what to do when the map has no 400-kill full record
+    #[arg(long, value_parser = ["current", "skip", "fail"])]
+    on_no_record: Option<String>,
+    /// Annihilation only: maximum PRTS proxy cards to consume this run
+    #[arg(long)]
+    max_cards: Option<i32>,
 }
 
 impl super::ToTaskType for FightParams {
@@ -77,7 +89,10 @@ impl super::IntoParameters for FightParams {
             "expiring_medicine" =>? self.expiring_medicine,
             "stone" =>? self.stone,
             "times" =>? self.times,
-            "series" =>? self.series
+            "series" =>? self.series,
+            "on_no_card" =>? self.on_no_card,
+            "on_no_record" =>? self.on_no_record,
+            "max_cards" =>? self.max_cards
         );
 
         // Drops handling
@@ -138,6 +153,8 @@ impl super::IntoParameters for FightParams {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use clap::Parser;
+
     use super::*;
     use crate::command::{Command, parse_from};
 
@@ -237,5 +254,34 @@ mod tests {
         );
 
         assert!(parse(["maa", "fight", "1-7", "-D30012=100", "-D30011"]).is_err());
+
+        assert_eq!(
+            parse([
+                "maa",
+                "fight",
+                "Annihilation",
+                "--on-no-card=skip",
+                "--on-no-record=fail",
+                "--max-cards=2",
+            ])
+            .unwrap(),
+            object!(
+                "stage" => "Annihilation",
+                "DrGrandet" => false,
+                "on_no_card" => "skip",
+                "on_no_record" => "fail",
+                "max_cards" => 2,
+            )
+        );
+
+        assert!(
+            crate::command::Cli::try_parse_from([
+                "maa",
+                "fight",
+                "Annihilation",
+                "--on-no-card=explode"
+            ])
+            .is_err()
+        );
     }
 }

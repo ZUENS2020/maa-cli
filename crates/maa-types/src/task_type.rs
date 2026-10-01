@@ -20,10 +20,11 @@ pub enum TaskType {
     Custom,
     SingleStep,
     VideoRecognition,
+    Status,
 }
 
 impl TaskType {
-    impl_enum_utils!(TaskType, 17, Self::StartUp);
+    impl_enum_utils!(TaskType, 18, Self::StartUp);
 
     impl_from_str_opt!();
 
@@ -46,6 +47,7 @@ impl TaskType {
             Self::Custom => "Custom",
             Self::SingleStep => "SingleStep",
             Self::VideoRecognition => "VideoRecognition",
+            Self::Status => "Status",
         }
     }
 }
@@ -92,6 +94,7 @@ mod tests {
         assert_eq!("Custom".parse(), Ok(TaskType::Custom));
         assert_eq!("SingleStep".parse(), Ok(TaskType::SingleStep));
         assert_eq!("VideoRecognition".parse(), Ok(TaskType::VideoRecognition));
+        assert_eq!("Status".parse(), Ok(TaskType::Status));
         assert_eq!(
             "Unknown".parse::<TaskType>(),
             Err(UnknownTaskType("Unknown".to_owned()))
@@ -100,7 +103,7 @@ mod tests {
             UnknownTaskType("Unknown".to_owned()).to_string(),
             "unknown task type `Unknown`, expected one of `StartUp`, `CloseDown`, `Fight`, \
             `Recruit`, `Infrast`, `Mall`, `Award`, `Roguelike`, `Copilot`, `SSSCopilot`, \
-            `ParadoxCopilot`, `Depot`, `OperBox`, `Reclamation`, `Custom`, `SingleStep`, `VideoRecognition`",
+            `ParadoxCopilot`, `Depot`, `OperBox`, `Reclamation`, `Custom`, `SingleStep`, `VideoRecognition`, `Status`",
         );
     }
 
@@ -128,12 +131,12 @@ mod tests {
                 &[Token::Str("Unknown")],
                 "unknown variant `Unknown`, expected one of `StartUp`, `CloseDown`, `Fight`, \
                 `Recruit`, `Infrast`, `Mall`, `Award`, `Roguelike`, `Copilot`, `SSSCopilot`, \
-                `ParadoxCopilot`, `Depot`, `OperBox`, `Reclamation`, `Custom`, `SingleStep`, `VideoRecognition`",
+                `ParadoxCopilot`, `Depot`, `OperBox`, `Reclamation`, `Custom`, `SingleStep`, `VideoRecognition`, `Status`",
             );
 
             assert_de_tokens_error::<TaskType>(
-                &[Token::U64(17)],
-                "invalid type: integer `17`, expected a valid task type",
+                &[Token::U64(18)],
+                "invalid type: integer `18`, expected a valid task type",
             );
         }
 
@@ -158,6 +161,7 @@ mod tests {
             assert_ser_tokens(&TaskType::VideoRecognition, &[Token::Str(
                 "VideoRecognition",
             )]);
+            assert_ser_tokens(&TaskType::Status, &[Token::Str("Status")]);
         }
     }
 
@@ -180,6 +184,7 @@ mod tests {
         assert_eq!(TaskType::Custom.to_str(), "Custom");
         assert_eq!(TaskType::SingleStep.to_str(), "SingleStep");
         assert_eq!(TaskType::VideoRecognition.to_str(), "VideoRecognition");
+        assert_eq!(TaskType::Status.to_str(), "Status");
     }
 
     #[cfg(feature = "ffi")]

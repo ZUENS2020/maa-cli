@@ -679,7 +679,7 @@ mod tests {
             },
             false,
         ));
-        report::add_task(0, 1, "Fight", maa_types::TaskType::Fight, true);
+        report::add_task(0, 1, "Fight", maa_types::TaskType::Fight, true, None, None);
 
         let (cb, _) = MaaCallback::new(true);
         cb.on_message(

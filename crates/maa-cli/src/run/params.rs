@@ -7,6 +7,9 @@ use maa_value::prelude::*;
 ///
 /// Returns `None` when the task type is free-form (Custom / SingleStep /
 /// VideoRecognition) or has no curated key list, so callers skip the warning.
+///
+/// The lists track stock MaaCore 6.18 plus fork extras (`Status`, annihilation
+/// `on_no_*` / `max_cards`). Unknown keys are a dry-run warning only.
 pub fn unknown_param_keys(task_type: TaskType, params: &MAAValue) -> Option<Vec<String>> {
     let known = known_keys(task_type)?;
     let map = params.as_map()?;
@@ -52,6 +55,10 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "server",
             "client_type",
             "DrGrandet",
+            "medicine_expire_days",
+            "on_no_card",
+            "on_no_record",
+            "max_cards",
         ],
         TaskType::Recruit => &[
             "enable",
@@ -65,6 +72,8 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "expedite",
             "expedite_times",
             "skip_robot",
+            "force_refresh",
+            "level3_recruitment_permit_reserve",
             "recruitment_time",
             "report_to_penguin",
             "penguin_id",
@@ -86,6 +95,13 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "reception_send_clue",
             "filename",
             "plan_index",
+            "continue_training",
+            "fiammetta_recovery_enabled",
+            "fiammetta_targets",
+            "use_abyssal_hunter",
+            "use_perception_information",
+            "use_pinus_sylvestris",
+            "use_worldly_plight",
         ],
         TaskType::Mall => &[
             "enable",
@@ -98,6 +114,7 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "reserve_max_credit",
             "credit_fight",
             "formation_index",
+            "select_formation",
         ],
         TaskType::Award => &[
             "enable",
@@ -107,6 +124,7 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "orundum",
             "mining",
             "specialaccess",
+            "signinevent",
         ],
         TaskType::Roguelike => &[
             "enable",
@@ -157,7 +175,7 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "support_unit_name",
         ],
         TaskType::SSSCopilot => &["enable", "filename", "loop_times"],
-        TaskType::ParadoxCopilot => &["enable", "filename"],
+        TaskType::ParadoxCopilot => &["enable", "filename", "list"],
         TaskType::Depot => &["enable"],
         TaskType::OperBox => &["enable"],
         TaskType::Reclamation => &[
@@ -167,6 +185,19 @@ fn known_keys(task_type: TaskType) -> Option<&'static [&'static str]> {
             "tools_to_craft",
             "increment_mode",
             "num_craft_batches",
+            "clear_store",
+        ],
+        TaskType::Status => &[
+            "enable",
+            "fields",
+            "sanity",
+            "currency",
+            "orundum",
+            "originite",
+            "lmd",
+            "annihilation",
+            "depot",
+            "drones",
         ],
         TaskType::Custom | TaskType::SingleStep | TaskType::VideoRecognition => return None,
     })
@@ -205,5 +236,81 @@ mod tests {
         let params = object!("award" => true, "maill" => true);
         let unknown = unknown_param_keys(TaskType::Award, &params).unwrap();
         assert_eq!(unknown, vec!["maill".to_owned()]);
+    }
+
+    #[test]
+    fn core_618_and_status_keys_are_known() {
+        let fight = object!(
+            "stage" => "Annihilation",
+            "on_no_card" => "skip",
+            "on_no_record" => "fail",
+            "max_cards" => 2,
+            "medicine_expire_days" => 3
+        );
+        assert!(
+            unknown_param_keys(TaskType::Fight, &fight)
+                .unwrap()
+                .is_empty()
+        );
+
+        let status = object!("sanity" => true, "annihilation" => true, "fields" => "sanity");
+        assert!(
+            unknown_param_keys(TaskType::Status, &status)
+                .unwrap()
+                .is_empty()
+        );
+
+        let award = object!("award" => true, "signinevent" => true);
+        assert!(
+            unknown_param_keys(TaskType::Award, &award)
+                .unwrap()
+                .is_empty()
+        );
+
+        let infrast = object!(
+            "continue_training" => true,
+            "fiammetta_recovery_enabled" => true,
+            "fiammetta_targets" => "Castle-3",
+            "use_abyssal_hunter" => true,
+            "use_perception_information" => true,
+            "use_pinus_sylvestris" => true,
+            "use_worldly_plight" => true
+        );
+        assert!(
+            unknown_param_keys(TaskType::Infrast, &infrast)
+                .unwrap()
+                .is_empty()
+        );
+
+        let recruit = object!(
+            "force_refresh" => true,
+            "level3_recruitment_permit_reserve" => 1
+        );
+        assert!(
+            unknown_param_keys(TaskType::Recruit, &recruit)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mall = object!("select_formation" => 1);
+        assert!(
+            unknown_param_keys(TaskType::Mall, &mall)
+                .unwrap()
+                .is_empty()
+        );
+
+        let reclamation = object!("clear_store" => true);
+        assert!(
+            unknown_param_keys(TaskType::Reclamation, &reclamation)
+                .unwrap()
+                .is_empty()
+        );
+
+        let paradox = object!("list" => true);
+        assert!(
+            unknown_param_keys(TaskType::ParadoxCopilot, &paradox)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

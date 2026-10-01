@@ -302,6 +302,8 @@ touch_mode = "MaaTouch"
 deployment_with_pause = false
 adb_lite_enabled = false
 kill_adb_on_exit = false
+# delay_multiplier = 1.0          # 仅在设置时发给核心，旧核心会忽略并警告
+# save_failure_screenshot = false  # 识别失败时保存调试截图，同样仅在设置时发送
 ```
 
 ### 连接配置
@@ -370,6 +372,8 @@ touch_mode = "ADB" # 使用的触摸模式，可选值为 "ADB"，"MiniTouch"，
 deployment_with_pause = false # 是否在部署时暂停游戏
 adb_lite_enabled = false # 是否使用 adb-lite
 kill_adb_on_exit = false # 是否在退出时杀死 adb
+delay_multiplier = 1.0 # 全局延时倍率，范围 [0.1, 10]，仅在配置时发送；旧核心拒绝后只记警告
+save_failure_screenshot = false # 识别失败结束任务时保存调试截图，仅在配置时发送
 ```
 
 注意，`touch_mode` 可选项 `MacPlayTools` 和连接方式 `PlayTools` 绑定。当你使用 `PlayTools` 连接时，`touch_mode` 将会被强制设置为 `MacPlayTools`。

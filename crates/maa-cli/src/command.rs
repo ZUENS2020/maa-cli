@@ -169,6 +169,21 @@ pub(crate) enum Command {
         #[command(flatten)]
         common: run::CommonArgs,
     },
+    /// Read-only game status snapshot
+    ///
+    /// Connects with the current profile and runs a Status task.
+    /// Does not fight, claim rewards, or shift infrastructure.
+    /// Requires a MaaCore that implements the Status task; older cores
+    /// report the task as unavailable instead of crashing.
+    Status {
+        #[command(flatten)]
+        params: run::preset::StatusParams,
+        /// Print the GameStatus snapshot as JSON
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        common: run::CommonArgs,
+    },
     /// Convert file format between TOML, YAML and JSON
     ///
     /// This command will convert a file from TOML, YAML or JSON format to another format.
@@ -563,6 +578,14 @@ mod test {
                 },
                 ..
             }
+        ));
+        assert!(matches!(
+            parse_from(["maa", "status", "--fields", "sanity,annihilation", "--json"]).command,
+            Command::Status {
+                params: run::preset::StatusParams { fields, startup: false },
+                json: true,
+                ..
+            } if fields == ["sanity", "annihilation"]
         ));
         assert!(matches!(
             parse_from(["maa", "run", "task", "--dry-run"]).command,

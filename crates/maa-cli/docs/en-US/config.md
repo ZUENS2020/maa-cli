@@ -313,6 +313,8 @@ touch_mode = "MaaTouch"
 deployment_with_pause = false
 adb_lite_enabled = false
 kill_adb_on_exit = false
+# delay_multiplier = 1.0          # sent only when set; older cores warn and ignore
+# save_failure_screenshot = false  # debug screenshot on recognition failure; sent only when set
 ```
 
 ### Connection
@@ -389,6 +391,8 @@ touch_mode = "ADB" # Touch mode: "ADB", "MiniTouch", "MaaTouch", or "MacPlayTool
 deployment_with_pause = false # Whether to pause game during deployment
 adb_lite_enabled = false # Whether to use adb-lite
 kill_adb_on_exit = false # Whether to kill adb on exit
+delay_multiplier = 1.0 # Global delay multiplier in [0.1, 10]; sent only when set. Older cores reject it with a warning
+save_failure_screenshot = false # Save a debug screenshot when recognition failure ends a task; sent only when set
 ```
 
 Note: When using `PlayTools` connection, `touch_mode` is forced to `MacPlayTools` regardless of setting.

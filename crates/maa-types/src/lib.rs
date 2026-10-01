@@ -33,6 +33,10 @@ pub enum InstanceOptionKey {
     KillAdbOnExit = 5,
     /// set client type (game channel), used to resolve PackageName on connect
     ClientType = 6,
+    /// Global delay/timeout multiplier (string float, default "1.0", range [0.1, 10])
+    DelayMultiplier = 7,
+    /// Save a debug screenshot when recognition failure ends a task ("0" | "1")
+    SaveFailureScreenshot = 8,
 }
 
 pub use client_type::{ClientType, UnknownClientTypeError};

@@ -321,38 +321,41 @@ pub struct TaskConfig {
 
 impl TaskConfig {
     pub fn new_with_task(task: Task) -> Result<Self> {
-        let mut task = task;
-        let client_type = task
-            .params
-            .get_typed::<&str>("client_type")
-            .map(|v| v.parse())
-            .transpose()?
-            .unwrap_or(ClientType::Official);
-        normalize_task_params(task.task_type, &mut task.params)?;
+        Self::new_with_tasks(vec![task])
+    }
 
-        match task.task_type {
-            TaskType::StartUp => Ok(Self {
-                client_type,
-                start_app: determine_start_app(&task.params),
-                close_app: false,
-                tasks: vec![task],
-                skipped: Vec::new(),
-            }),
-            TaskType::CloseDown => Ok(Self {
-                client_type,
-                start_app: false,
-                close_app: determine_close_app(&task.params),
-                tasks: vec![task],
-                skipped: Vec::new(),
-            }),
-            _ => Ok(Self {
-                client_type,
-                start_app: false,
-                close_app: false,
-                tasks: vec![task],
-                skipped: Vec::new(),
-            }),
+    pub fn new_with_tasks(tasks: Vec<Task>) -> Result<Self> {
+        let mut client_type = None;
+        let mut start_app = false;
+        let mut close_app = false;
+        let mut indexed = Vec::with_capacity(tasks.len());
+
+        for (index, mut task) in tasks.into_iter().enumerate() {
+            let task_client_type = task
+                .params
+                .get_typed::<&str>("client_type")
+                .map(|v| v.parse())
+                .transpose()?;
+            if client_type.is_none() {
+                client_type = task_client_type;
+            }
+            normalize_task_params(task.task_type, &mut task.params)?;
+            match task.task_type {
+                TaskType::StartUp => start_app = determine_start_app(&task.params),
+                TaskType::CloseDown => close_app = determine_close_app(&task.params),
+                _ => {}
+            }
+            task.index = index;
+            indexed.push(task);
         }
+
+        Ok(Self {
+            client_type: client_type.unwrap_or(ClientType::Official),
+            start_app,
+            close_app,
+            tasks: indexed,
+            skipped: Vec::new(),
+        })
     }
 }
 

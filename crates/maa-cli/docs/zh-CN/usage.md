@@ -47,11 +47,25 @@ maa init
 
 - `maa startup [client]`: 启动游戏并进入主界面，`[client]` 是客户端类型，如果留空则不会启动游戏客户端。
 - `maa closedown [client]`: 关闭游戏客户端，`[client]` 是客户端类型，默认为 `Official`。
-- `maa fight [stage]`: 运行战斗任务，`[stage]` 是关卡名称，例如 `1-7`；留空选择上次或者当前关卡。
+- `maa fight [stage]`: 运行战斗任务，`[stage]` 是关卡名称，例如 `1-7`；留空选择上次或者当前关卡。剿灭可用 `--on-no-card` / `--on-no-record` / `--max-cards`（需较新的 MaaCore；旧核心会忽略这些参数）。
 - `maa copilot <maa_uri>...`: 自动抄作业，其中 `<maa_uri>` 是作业的 URI，多个 URI 会依次执行，`maa_uri` 可以是 `maa://1234` 或者 本地文件路径 `./1234.json`。
 - `maa sscopilot <maa_uri>`: 自动保全派驻，其中 `<maa_uri>` 是保全派驻作业的 URI。
 - `maa roguelike <theme>`: 自动集成战略，`<theme>` 是集成战略的主题，可选值为 `Phantom`，`Mizuki`，`Sami`，`Sarkaz` 以及 `JieGarden`.
 - `maa reclamation <theme>`: 自动生息演算，`<theme>` 是生息演算的主题，目前仅 `Tales` 主题可用。
+- `maa status [--fields sanity,annihilation,...] [--startup] [--json]`: 只读快照理智、货币、剿灭进度等，不战斗、不领奖、不换班。需要实现了 Status 任务的 MaaCore；旧核心会把该任务记为不可用而不是崩溃。
+
+`--json` 只打印核心回传的 `GameStatus` 快照：
+
+```bash
+maa status --fields sanity,annihilation --startup --json
+```
+
+```json
+{
+  "sanity": { "current": 80, "max": 135 },
+  "annihilation": { "weekly_progress": 370, "weekly_cap": 1800 }
+}
+```
 
 上述任务接受一些参数，你可以通过 `maa <task> --help` 来查看具体的参数。
 
@@ -91,13 +105,13 @@ maa run daily --batch --report /tmp/maa-report.json --output json --strict-exit
 
 报告包含起止时间、cli/core/resource 版本，以及每个任务的 `name`、`type`、`status`（`succeeded` / `failed` / `skipped` / `stopped` / `not_run`）、时长和失败/跳过原因。任务级详情从 MaaCore 已有回调聚合：
 
-- `fight`：关卡、次数、理智消耗（若回调提供）、按 item id 汇总的掉落
-- `annihilation`：进度等字段（核心若上报）；未知字段原样保留
+- `fight`：关卡、次数、开战/结束理智、按 item id 汇总的掉落
+- `annihilation`：周进度 `progress_before` / `progress_after` / `weekly_cap` / `cards_used`。库存核心可从 `StageDrops.annihilation_weekly_process` 填入；理智不足 25 且未达周上限时记 `SANITY_NOT_ENOUGH`。`WEEKLY_CAP_REACHED` 等码来自新核心
 - `recruit`：已发起的公招次数与 tag
 - `infrast`：处理过的房间
-- `award`：已领取的奖励类型（能从子任务名判断时）
+- `award.checked`：实际检查过的奖励入口；`award.claimed`：实际领取到的（如 `ReceiveAward` / `Mail_ReceiveAll`）
 
-`skipped` 与 `succeeded` 是分开的：例如 `[[tasks.variants]]` 条件不匹配，或核心通过回调给出 `WEEKLY_CAP_REACHED` / `NO_PRTS_CARD` / `NO_FULL_RECORD` 等跳过码。未执行到的任务是 `not_run`。未知或新增的回调字段会进入每个任务的 `details` 对象，因此后续核心新增的 Status / 剿灭原因码无需改 schema 也能出现在报告里。
+`skipped` 与 `succeeded` 是分开的：例如 `[[tasks.variants]]` 条件不匹配，或核心通过回调给出 `WEEKLY_CAP_REACHED` / `NO_PRTS_CARD` / `NO_FULL_RECORD` / `SANITY_NOT_ENOUGH` 等跳过码。未执行到的任务是 `not_run`。未知或新增的回调字段会进入每个任务的 `details` 对象。`--report` 写出的文件权限为 `0644`。
 
 `--dry-run` 会额外对已知任务类型的参数名做校验，例如把 `mail` 拼成 `mial` 时会给出警告；自定义任务（`Custom`）不会检查。
 

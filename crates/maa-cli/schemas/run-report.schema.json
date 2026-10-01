@@ -40,6 +40,11 @@
       "type": "array",
       "items": { "$ref": "#/definitions/task" }
     },
+    "game_status": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Last GameStatus snapshot from a Status task, if the core emitted one."
+    },
     "details": {
       "type": "object",
       "additionalProperties": true
@@ -86,12 +91,19 @@
             "progress_after": { "type": "integer" },
             "weekly_cap": { "type": "integer" },
             "prts_cards": { "type": "integer" },
-            "cards_used": { "type": "integer" }
+            "cards_used": { "type": "integer" },
+            "reason": { "type": "string" },
+            "map_name": { "type": "string" },
+            "region": { "type": "string" }
           }
         },
         "recruit": { "$ref": "#/definitions/recruit" },
         "infrast": { "$ref": "#/definitions/infrast" },
         "award": { "$ref": "#/definitions/award" },
+        "game_status": {
+          "type": "object",
+          "additionalProperties": true
+        },
         "details": {
           "type": "object",
           "additionalProperties": true,
@@ -104,6 +116,7 @@
       "additionalProperties": true,
       "properties": {
         "stage": { "type": "string" },
+        "stage_id": { "type": "string" },
         "times": { "type": "integer" },
         "sanity_used": { "type": "integer" },
         "drops": {
@@ -118,6 +131,7 @@
         "medicine": { "type": "integer" },
         "expiring_medicine": { "type": "integer" },
         "stone": { "type": "integer" },
+        "sanity_start": { "type": "object", "additionalProperties": true },
         "sanity": { "type": "object", "additionalProperties": true }
       }
     },
@@ -167,9 +181,15 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "checked": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Reward entries that were actually inspected"
+        },
         "claimed": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string" },
+          "description": "Rewards that were actually received"
         }
       }
     }

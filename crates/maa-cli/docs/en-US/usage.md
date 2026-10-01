@@ -41,11 +41,25 @@ For common tasks, maa-cli provides several predefined options:
 
 - `maa startup [client]`: Start the game and enter the main interface. `[client]` is the client type; leave empty to not start any game client.
 - `maa closedown [client]`: Close the game client. `[client]` is the client type, defaulting to `Official`.
-- `maa fight [stage]`: Run a combat task. `[stage]` is the stage name like `1-7`; leave empty to select the last or current stage.
+- `maa fight [stage]`: Run a combat task. `[stage]` is the stage name like `1-7`; leave empty to select the last or current stage. Annihilation accepts `--on-no-card` / `--on-no-record` / `--max-cards` (newer MaaCore; older cores ignore these keys).
 - `maa copilot <maa_uri>...`: Auto-run copilot tasks. `<maa_uri>` is the task URI, multiple URIs will execute in sequence. `maa_uri` can be `maa://1234` or a local file path like `./1234.json`.
 - `maa sscopilot <maa_uri>`: Auto-run Stationary Security Service tasks. `<maa_uri>` is the task URI.
 - `maa roguelike <theme>`: Auto-run Integrated Strategy. `<theme>` is the theme, with options including `Phantom`, `Mizuki`, `Sami`, `Sarkaz`, and `JieGarden`.
 - `maa reclamation <theme>`: Auto-run Reclamation Algorithm. `<theme>` is the theme, currently only `Tales` is available.
+- `maa status [--fields sanity,annihilation,...] [--startup] [--json]`: Read-only snapshot of sanity, currency, annihilation progress, and similar fields. Does not fight, claim rewards, or shift infrastructure. Requires a MaaCore that implements the Status task; older cores mark the task unavailable instead of crashing.
+
+`--json` prints only the `GameStatus` snapshot:
+
+```bash
+maa status --fields sanity,annihilation --startup --json
+```
+
+```json
+{
+  "sanity": { "current": 80, "max": 135 },
+  "annihilation": { "weekly_progress": 370, "weekly_cap": 1800 }
+}
+```
 
 These tasks accept various parameters. You can view the specific parameters with `maa <task> --help`.
 
@@ -84,13 +98,13 @@ maa run daily --batch --report /tmp/maa-report.json --output json --strict-exit
 
 The report includes start/finish timestamps, cli/core/resource versions, and per-task `name`, `type`, `status` (`succeeded` / `failed` / `skipped` / `stopped` / `not_run`), duration, and a failure/skip reason. Per-type details are aggregated from callbacks MaaCore already emits:
 
-- `fight`: stage, times fought, sanity used when reported, drops keyed by item id
-- `annihilation`: progress fields when the core reports them; unknown fields are kept as-is
+- `fight`: stage, times fought, sanity at start and end, drops keyed by item id
+- `annihilation`: weekly `progress_before` / `progress_after` / `weekly_cap` / `cards_used`. Stock cores fill this from `StageDrops.annihilation_weekly_process`; sanity under 25 with the cap not reached is recorded as `SANITY_NOT_ENOUGH`. `WEEKLY_CAP_REACHED` and similar codes come from a newer core
 - `recruit`: recruits started and their tags
 - `infrast`: rooms handled
-- `award`: claimed reward kinds when they can be inferred from subtask names
+- `award.checked`: reward entries that were actually inspected; `award.claimed`: rewards that were actually received (for example `ReceiveAward` / `Mail_ReceiveAll`)
 
-`skipped` is distinct from `succeeded`: for example a `[[tasks.variants]]` condition that did not match, or a core skip code such as `WEEKLY_CAP_REACHED` / `NO_PRTS_CARD` / `NO_FULL_RECORD`. Tasks that never started are `not_run`. Unknown or future callback fields are stored on each task's `details` object, so new Status / annihilation reason callbacks appear without a schema change.
+`skipped` is distinct from `succeeded`: for example a `[[tasks.variants]]` condition that did not match, or a core skip code such as `WEEKLY_CAP_REACHED` / `NO_PRTS_CARD` / `NO_FULL_RECORD` / `SANITY_NOT_ENOUGH`. Tasks that never started are `not_run`. Unknown or future callback fields are stored on each task's `details` object. `--report` writes the file with mode `0644`.
 
 `--dry-run` also warns about unknown parameter keys for known task types (for example a typo like `mial` instead of `mail`). Free-form `Custom` tasks are not checked.
 

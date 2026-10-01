@@ -571,6 +571,10 @@ pub struct InstanceOptions {
     pub(super) deployment_with_pause: Option<bool>,
     pub(super) adb_lite_enabled: Option<bool>,
     pub(super) kill_adb_on_exit: Option<bool>,
+    /// Global delay/timeout multiplier. Only sent when set, so older cores are unaffected.
+    pub(super) delay_multiplier: Option<f64>,
+    /// Save a debug screenshot on recognition failure. Only sent when set.
+    pub(super) save_failure_screenshot: Option<bool>,
 }
 
 impl InstanceOptions {
@@ -613,6 +617,32 @@ impl InstanceOptions {
             debug!("Setting kill adb on exit to {kill_adb_on_exit}");
             asst.set_instance_option(InstanceOptionKey::KillAdbOnExit, kill_adb_on_exit)
                 .context("Failed to set kill adb on exit")?;
+        }
+        if let Some(delay_multiplier) = self.delay_multiplier {
+            if !(0.1..=10.0).contains(&delay_multiplier) {
+                warn!("Ignoring delay_multiplier={delay_multiplier}: valid range is [0.1, 10]");
+            } else {
+                let value = delay_multiplier.to_string();
+                debug!("Setting delay multiplier to {value}");
+                if let Err(err) =
+                    asst.set_instance_option(InstanceOptionKey::DelayMultiplier, value.as_str())
+                {
+                    warn!(
+                        "Core rejected instance option delay_multiplier={value}: {err} (needs a newer MaaCore)"
+                    );
+                }
+            }
+        }
+        if let Some(save_failure_screenshot) = self.save_failure_screenshot {
+            debug!("Setting save failure screenshot to {save_failure_screenshot}");
+            if let Err(err) = asst.set_instance_option(
+                InstanceOptionKey::SaveFailureScreenshot,
+                save_failure_screenshot,
+            ) {
+                warn!(
+                    "Core rejected instance option save_failure_screenshot={save_failure_screenshot}: {err} (needs a newer MaaCore)"
+                );
+            }
         }
         Ok(())
     }
@@ -694,6 +724,7 @@ mod tests {
                     deployment_with_pause: Some(false),
                     adb_lite_enabled: Some(false),
                     kill_adb_on_exit: Some(false),
+                    ..Default::default()
                 },
                 behavior: BehaviorConfig::default(),
             });
@@ -847,6 +878,7 @@ mod tests {
                     deployment_with_pause: None,
                     adb_lite_enabled: None,
                     kill_adb_on_exit: None,
+                    ..Default::default()
                 },
                 &[Token::Map { len: Some(0) }, Token::MapEnd],
             );
@@ -857,6 +889,7 @@ mod tests {
                     deployment_with_pause: Some(false),
                     adb_lite_enabled: Some(false),
                     kill_adb_on_exit: Some(false),
+                    ..Default::default()
                 },
                 &[
                     Token::Map { len: Some(4) },
@@ -873,6 +906,24 @@ mod tests {
                     Token::Some,
                     Token::Bool(false),
                     Token::Str("kill_adb_on_exit"),
+                    Token::Some,
+                    Token::Bool(false),
+                    Token::MapEnd,
+                ],
+            );
+
+            assert_de_tokens(
+                &InstanceOptions {
+                    delay_multiplier: Some(2.5),
+                    save_failure_screenshot: Some(false),
+                    ..Default::default()
+                },
+                &[
+                    Token::Map { len: Some(2) },
+                    Token::Str("delay_multiplier"),
+                    Token::Some,
+                    Token::F64(2.5),
+                    Token::Str("save_failure_screenshot"),
                     Token::Some,
                     Token::Bool(false),
                     Token::MapEnd,
@@ -913,6 +964,7 @@ mod tests {
                         deployment_with_pause: None,
                         adb_lite_enabled: None,
                         kill_adb_on_exit: None,
+                        ..Default::default()
                     },
                     behavior: BehaviorConfig::default(),
                 },

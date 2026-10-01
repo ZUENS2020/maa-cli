@@ -160,17 +160,14 @@ where
 {
     callback::reset_run_flags();
 
-    let want_report = args.report.is_some() || args.output.is_some() || args.strict_exit;
-    if want_report {
-        report::init(report::Recorder::new(
-            report::Versions {
-                cli: CLI_VERSION_STR.to_owned(),
-                core: None,
-                resource: report::resource_version(),
-            },
-            args.dry_run,
-        ));
-    }
+    report::init(report::Recorder::new(
+        report::Versions {
+            cli: CLI_VERSION_STR.to_owned(),
+            core: None,
+            resource: report::resource_version(),
+        },
+        args.dry_run,
+    ));
 
     // Auto update hot update resource
     installer::hot_update::update()?;
@@ -230,25 +227,51 @@ where
         if args.dry_run {
             params::warn_unknown_params(task_type, task.name_or_default(), &task.params);
         }
-        let id = asst
-            .append_task(task_type, params.as_str())
-            .with_context(|| {
-                format!(
-                    "Failed to add task {} with params: {params}",
+        let configured_stage = task
+            .params
+            .get("stage")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned);
+        let configured_times = task
+            .params
+            .get("times")
+            .and_then(|value| value.as_int())
+            .map(i64::from);
+
+        match asst.append_task(task_type, params.as_str()) {
+            Ok(id) => {
+                report::add_task(
+                    task.index,
+                    id,
                     task.name_or_default(),
-                )
-            })?;
-
-        report::add_task(
-            task.index,
-            id,
-            task.name_or_default(),
-            task_type,
-            task.params.get_or("enable", true),
-        );
-
-        if let Some(s) = task_summary.as_mut() {
-            s.insert(id, task.name, task_type);
+                    task_type,
+                    task.params.get_or("enable", true),
+                    configured_stage,
+                    configured_times,
+                );
+                if let Some(s) = task_summary.as_mut() {
+                    s.insert(id, task.name, task_type);
+                }
+            }
+            Err(err) if task_type == maa_types::TaskType::Status => {
+                warn!(
+                    "Core rejected Status task (needs a newer MaaCore with the Status task): {err}"
+                );
+                report::add_unavailable(
+                    task.index,
+                    task.name_or_default(),
+                    task_type,
+                    format!("{err:#}"),
+                );
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to add task {} with params: {params}",
+                        task.name_or_default(),
+                    )
+                });
+            }
         }
     }
     if let Some(s) = task_summary {
@@ -381,6 +404,37 @@ where
 
 pub fn run_preset(params: impl preset::IntoTaskConfig, args: CommonArgs) -> Result<()> {
     run(|config| params.into_task_config(config), args)
+}
+
+pub fn run_status(
+    params: impl preset::IntoTaskConfig,
+    args: CommonArgs,
+    print_json: bool,
+) -> Result<()> {
+    run(|config| params.into_task_config(config), args)?;
+    let snapshot = report::last_game_status();
+    if print_json {
+        match snapshot {
+            Some(value) => {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            None => {
+                anyhow::bail!(
+                    "No GameStatus snapshot (MaaCore may not support the Status task, or the run did not finish)"
+                );
+            }
+        }
+    } else if let Some(value) = snapshot {
+        info_status_snapshot(&value);
+    }
+    Ok(())
+}
+
+fn info_status_snapshot(value: &serde_json::Value) {
+    match serde_json::to_string_pretty(value) {
+        Ok(text) => println!("{text}"),
+        Err(err) => warn!("Failed to format GameStatus snapshot: {err}"),
+    }
 }
 
 pub fn run_custom(path: impl AsRef<Path>, args: CommonArgs) -> Result<()> {

@@ -43,7 +43,17 @@
         "touch_mode": { "$ref": "#/definitions/touchMode" },
         "deployment_with_pause": { "type": "boolean" },
         "adb_lite_enabled": { "type": "boolean" },
-        "kill_adb_on_exit": { "type": "boolean" }
+        "kill_adb_on_exit": { "type": "boolean" },
+        "delay_multiplier": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 10,
+          "description": "Global delay/timeout multiplier. Sent only when set so older cores are unaffected."
+        },
+        "save_failure_screenshot": {
+          "type": "boolean",
+          "description": "Save a debug screenshot when recognition failure ends a task. Sent only when set."
+        }
       }
     }
   },
